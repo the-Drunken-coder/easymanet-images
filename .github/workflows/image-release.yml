@@ -161,7 +161,7 @@ jobs:
 
           manifest = {
               "schema_version": 1,
-              "generated_at": dt.datetime.now(dt.UTC).isoformat(),
+              "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
               "release_tag": os.environ["RELEASE_TAG"],
               "openmanet_version": os.environ["OPENMANET_VERSION"],
               "board": os.environ["BOARD"],
