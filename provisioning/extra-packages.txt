@@ -1,0 +1,6 @@
+# Extra OpenWrt packages to enable in the EasyMANET image.
+# One package per line. Lines starting with # are ignored.
+# The build workflow appends `CONFIG_PACKAGE_<name>=y` to .config and
+# runs `make defconfig` so dependencies resolve.
+
+iperf3

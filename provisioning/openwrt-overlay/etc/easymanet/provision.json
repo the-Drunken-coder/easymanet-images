@@ -1,0 +1,3 @@
+{
+  "note": "Placeholder only. EasyMANET writes the real node-specific provision.json to /easymanet/provision.json on the FAT boot partition during flash."
+}

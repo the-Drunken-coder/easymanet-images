@@ -1,0 +1,14 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+.openmanet-cache/
+*.egg-info/
+*.egg
+examples/fleet.yml

@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Minimal jsonfilter stub for provision.sh behavior tests."""
+
+import json
+import re
+import sys
+
+
+def load_json(path: str):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def walk(obj, keys):
+    cur = obj
+    for key in keys:
+        if key == "":
+            continue
+        if isinstance(cur, dict):
+            cur = cur.get(key)
+        else:
+            return None
+    return cur
+
+
+def main() -> int:
+    if len(sys.argv) < 4 or sys.argv[1] != "-i" or "-e" not in sys.argv:
+        return 1
+    path = sys.argv[2]
+    expr_idx = sys.argv.index("-e") + 1
+    if expr_idx >= len(sys.argv):
+        return 1
+    expr = sys.argv[expr_idx]
+    data = load_json(path)
+
+    if expr.endswith("[*]"):
+        if not expr.startswith("@."):
+            return 1
+        base = expr[2:-3]  # drop @. and [*]
+        keys = base.split(".")
+        cur = walk(data, keys)
+        if isinstance(cur, list):
+            for item in cur:
+                print(item)
+            return 0
+        return 1
+
+    if not expr.startswith("@."):
+        return 1
+    keys = expr[2:].split(".")
+    cur = walk(data, keys)
+    if cur is None:
+        return 1
+    if isinstance(cur, list):
+        return 0
+    if isinstance(cur, dict):
+        return 0
+    if isinstance(cur, bool):
+        print("true" if cur else "false")
+    else:
+        print(cur)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, json.JSONDecodeError, KeyError):
+        sys.exit(1)

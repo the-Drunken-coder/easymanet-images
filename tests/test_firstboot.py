@@ -1,0 +1,123 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+OVERLAY = ROOT / "provisioning" / "openwrt-overlay"
+PROVISION_SCRIPT = OVERLAY / "usr" / "lib" / "easymanet" / "provision.sh"
+PROVISION_LIB = OVERLAY / "usr" / "lib" / "easymanet" / "provision-lib.sh"
+
+
+def test_provision_lib_exists_and_is_sourced():
+    assert PROVISION_LIB.exists()
+    text = PROVISION_SCRIPT.read_text()
+    assert "provision-lib.sh" in text
+
+
+def test_firstboot_provisioner_uses_openwrt_jsonfilter_not_python():
+    text = PROVISION_SCRIPT.read_text()
+    assert "jsonfilter" in text
+    assert "python3" not in text
+
+
+def test_firstboot_supports_easymanet_prefix_for_sandboxed_runs():
+    text = PROVISION_SCRIPT.read_text()
+    assert 'EASYMANET_PREFIX:=' in text
+    assert "_prefix_path" in text
+
+
+def test_firstboot_fails_if_root_password_hash_not_applied():
+    text = PROVISION_SCRIPT.read_text()
+    assert "failed to set root password hash in /etc/shadow" in text
+    shadow_block = text.split("Setting root password hash")[1].split("Configuring mesh")[0]
+    assert 'sed -i "s|^root:.*|root:${ROOT_PW_HASH}' in shadow_block
+    assert "shadow_path" in shadow_block
+    assert "failed to set root password hash" in shadow_block
+    assert "|| true" not in shadow_block.split("sed -i")[1].split("fi")[0]
+
+
+def test_uci_defaults_propagates_provision_failure_rc():
+    defaults = OVERLAY / "etc" / "uci-defaults" / "99-easymanet"
+    text = defaults.read_text()
+    assert "set -eu" in text
+    assert "set +e" in text
+    assert '/bin/sh "$PROVISION_SCRIPT"' in text
+    assert "rc=$?" in text
+    assert "set -e" in text.split("rc=$?")[1]
+    assert 'if [ "$rc" -eq 0 ]; then' in text
+    assert 'if /bin/sh "$PROVISION_SCRIPT"; then' not in text
+    assert "provisioning failed with rc=" in text
+    assert 'exit "$rc"' in text
+
+
+def test_firstboot_honors_ssh_enabled_flag():
+    text = PROVISION_SCRIPT.read_text()
+    assert "SSH_ENABLED=0" in text
+    assert 'if [ -n "$(json_val management ssh_enabled)" ]; then' in text
+    assert 'json_bool management ssh_enabled && SSH_ENABLED=1' in text
+    assert 'elif [ "$NODE_ROLE" = "gate" ]; then' in text
+    assert 'dropbear_init=' in text
+    assert '"$dropbear_init" enable' in text
+    assert '"$dropbear_init" restart' in text
+    assert '"$dropbear_init" start' in text
+    assert '"$dropbear_init" disable' in text
+
+
+def test_firstboot_temp_boot_mount_is_writable_for_payload_removal():
+    text = PROVISION_SCRIPT.read_text()
+    assert 'mount -t vfat "$dev" "$BOOT_MOUNT_TMP"' in text
+    assert 'mount -o ro -t vfat "$dev" "$BOOT_MOUNT_TMP"' not in text
+    wipe_block = text.split("wipe_boot_provision_json() {", 1)[1].split("}", 1)[0]
+    assert '"$BOOT_JSON"' in wipe_block
+    assert 'if [ "$BOOT_MOUNTED_TMP" -eq 1 ]' not in wipe_block
+
+
+def test_firstboot_requires_node_ip():
+    text = PROVISION_SCRIPT.read_text()
+    required_block = text.split('if [ -z "$MESH_ID" ]', 1)[1].split("fi", 1)[0]
+    assert '[ -z "$NODE_IP" ]' in required_block
+
+
+def test_firstboot_does_not_auto_reboot_after_provisioning():
+    text = PROVISION_SCRIPT.read_text()
+    assert "( sleep 5; reboot )" not in text
+    assert "reboot ) &" not in text
+
+
+def test_management_lan_repair_hook_is_packaged_and_enabled():
+    helper = OVERLAY / "usr" / "lib" / "easymanet" / "network.sh"
+    init = OVERLAY / "etc" / "init.d" / "easymanet-management-lan"
+    defaults = OVERLAY / "etc" / "uci-defaults" / "97-easymanet-management-lan"
+
+    assert helper.exists()
+    assert init.exists()
+    assert defaults.exists()
+    helper_text = helper.read_text()
+    assert "provision-lib.sh" in helper_text
+    assert "easymanet_repair_management_lan" in helper_text
+    assert "uci -q delete network.wan" in helper_text
+    assert "brctl addif br-lan" in helper_text
+    init_text = init.read_text()
+    assert "sleep 25" in init_text
+    assert "EASYMANET_LIB_DIR=/usr/lib/easymanet" in init_text
+    assert "write_easymanet_boot_report post-management-lan" in init_text
+    assert "/etc/init.d/easymanet-management-lan enable" in defaults.read_text()
+
+
+def test_boot_report_hook_is_packaged_and_enabled():
+    report = OVERLAY / "usr" / "lib" / "easymanet" / "boot-report.sh"
+    init = OVERLAY / "etc" / "init.d" / "easymanet-boot-report"
+    defaults = OVERLAY / "etc" / "uci-defaults" / "98-easymanet-boot-report"
+
+    assert report.exists()
+    assert init.exists()
+    assert defaults.exists()
+    report_text = report.read_text()
+    assert "write_easymanet_boot_report" in report_text
+    assert "boot-report-latest" in report_text
+    assert "easymanet_redact_uci_wireless" in report_text
+    assert "easymanet_redact_uci_mesh11sd" in report_text
+    assert 'run_report_cmd "$latest/uci-mesh11sd.txt" easymanet_redact_uci_mesh11sd' in report_text
+    assert 'easymanet_redact_config_mesh11sd > "$latest/config-mesh11sd"' in report_text
+    assert 'cp /etc/easymanet/provision.json' not in report_text
+    assert 'cp /etc/config/mesh11sd "$latest/config-mesh11sd"' not in report_text
+    assert "/etc/init.d/easymanet-boot-report enable" in defaults.read_text()
+    assert "write_easymanet_boot_report provisioned" in PROVISION_SCRIPT.read_text()

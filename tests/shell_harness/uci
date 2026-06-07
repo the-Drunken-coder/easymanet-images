@@ -1,0 +1,139 @@
+#!/bin/sh
+# Minimal uci stub for provision.sh behavior tests.
+# State file: $UCI_STATE_FILE (one "uci show" line per line).
+
+: "${UCI_STATE_FILE:=/tmp/easymanet-uci-state.$$}"
+
+_uci_ensure() {
+    [ -f "$UCI_STATE_FILE" ] || : > "$UCI_STATE_FILE"
+}
+
+_uci_escape_sed() {
+    printf '%s' "$1" | sed 's/[.[\*^$()+?{|\\]/\\&/g'
+}
+
+_uci_set_line() {
+    key="$1"
+    value="$2"
+    _uci_ensure
+    esc="$(_uci_escape_sed "$key")"
+    tmp="${UCI_STATE_FILE}.tmp"
+    grep -v "^${esc}=" "$UCI_STATE_FILE" 2>/dev/null > "$tmp" || true
+    if [ -n "$value" ]; then
+        printf "%s='%s'\n" "$key" "$value" >> "$tmp"
+    else
+        printf "%s=\n" "$key" >> "$tmp"
+    fi
+    mv "$tmp" "$UCI_STATE_FILE"
+}
+
+_uci_delete_prefix() {
+    prefix="$1"
+    _uci_ensure
+    esc="$(_uci_escape_sed "$prefix")"
+    tmp="${UCI_STATE_FILE}.tmp"
+    grep -v "^${esc}" "$UCI_STATE_FILE" 2>/dev/null > "$tmp" || true
+    mv "$tmp" "$UCI_STATE_FILE"
+}
+
+_uci_apply_set() {
+    arg="$1"
+    case "$arg" in
+        *.*.*=*)
+            key="${arg%%=*}"
+            value="${arg#*=}"
+            value="${value#\"}"
+            value="${value%\"}"
+            _uci_set_line "$key" "$value"
+            ;;
+        *.*=*)
+            key="${arg%%=*}"
+            value="${arg#*=}"
+            value="${value#\"}"
+            value="${value%\"}"
+            _uci_ensure
+            esc="$(_uci_escape_sed "$key")"
+            tmp="${UCI_STATE_FILE}.tmp"
+            grep -v "^${esc}=" "$UCI_STATE_FILE" 2>/dev/null > "$tmp" || true
+            printf "%s=%s\n" "$key" "$value" >> "$tmp"
+            mv "$tmp" "$UCI_STATE_FILE"
+            ;;
+        *)
+            key="$arg"
+            _uci_set_line "$key" ""
+            ;;
+    esac
+}
+
+case "$1" in
+    show)
+        _uci_ensure
+        pkg="${2:-}"
+        if [ -z "$pkg" ]; then
+            cat "$UCI_STATE_FILE"
+        else
+            esc_pkg="$(_uci_escape_sed "$pkg")"
+            grep "^${esc_pkg}\." "$UCI_STATE_FILE" 2>/dev/null || true
+            grep "^${esc_pkg}=" "$UCI_STATE_FILE" 2>/dev/null || true
+        fi
+        ;;
+    set)
+        shift
+        for arg in "$@"; do
+            _uci_apply_set "$arg"
+        done
+        ;;
+    -q)
+        shift
+        case "$1" in
+            get)
+                shift
+                key="$1"
+                _uci_ensure
+                esc_key="$(_uci_escape_sed "$key")"
+                line="$(grep "^${esc_key}=" "$UCI_STATE_FILE" 2>/dev/null | head -n 1)" || true
+                if [ -n "$line" ]; then
+                    val="${line#*=}"
+                    val="${val#\'}"
+                    val="${val%\'}"
+                    printf '%s\n' "$val"
+                fi
+                ;;
+            delete)
+                shift
+                key="$1"
+                _uci_delete_prefix "$key"
+                ;;
+        esac
+        ;;
+    commit)
+        ;;
+    add)
+        shift
+        pkg="$1"
+        _uci_ensure
+        esc_pkg="$(_uci_escape_sed "$pkg")"
+        n=0
+        while grep -q "^${esc_pkg}\.@${esc_pkg}\[${n}\]" "$UCI_STATE_FILE" 2>/dev/null; do
+            n=$((n + 1))
+        done
+        printf '%s\n' "@${pkg}[${n}]"
+        ;;
+    add_list)
+        shift
+        key="${1%%=*}"
+        value="${1#*=}"
+        value="${value#\"}"
+        value="${value%\"}"
+        esc_key="$(_uci_escape_sed "$key")"
+        existing="$(grep "^${esc_key}=" "$UCI_STATE_FILE" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d "'")"
+        if [ -n "$existing" ]; then
+            _uci_set_line "$key" "${existing} ${value}"
+        else
+            _uci_set_line "$key" "$value"
+        fi
+        ;;
+    *)
+        exit 0
+        ;;
+esac

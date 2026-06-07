@@ -1,0 +1,66 @@
+name: Bootstrap Image Release
+
+on:
+  repository_dispatch:
+    types: [easymanet-image-release]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: GitHub release tag to create, such as images-v0.1.0
+        required: false
+        default: ""
+      openmanet_version:
+        description: OpenMANET tag or branch to build
+        required: false
+        default: "1.6.5"
+      board:
+        description: OpenMANET board profile
+        required: false
+        default: "ekh-bcm2711"
+      target:
+        description: Firmware target suffix
+        required: false
+        default: "rpi4-mm6108-spi"
+      jobs:
+        description: Parallel OpenWrt make jobs inside Docker
+        required: false
+        default: "2"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    name: Dispatch image release workflow
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Dispatch Image Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag || '' }}
+          INPUT_OPENMANET_VERSION: ${{ inputs.openmanet_version || '' }}
+          INPUT_BOARD: ${{ inputs.board || '' }}
+          INPUT_TARGET: ${{ inputs.target || '' }}
+          INPUT_JOBS: ${{ inputs.jobs || '' }}
+          PAYLOAD_RELEASE_TAG: ${{ github.event.client_payload.release_tag || '' }}
+          PAYLOAD_OPENMANET_VERSION: ${{ github.event.client_payload.openmanet_version || '' }}
+          PAYLOAD_BOARD: ${{ github.event.client_payload.board || '' }}
+          PAYLOAD_TARGET: ${{ github.event.client_payload.target || '' }}
+          PAYLOAD_JOBS: ${{ github.event.client_payload.jobs || '' }}
+          PAYLOAD_SOURCE_REPO: ${{ github.event.client_payload.source_repo || '' }}
+          PAYLOAD_SOURCE_REF: ${{ github.event.client_payload.source_ref || '' }}
+          PAYLOAD_SOURCE_SHA: ${{ github.event.client_payload.source_sha || '' }}
+        run: |
+          set -euo pipefail
+          release_tag="${PAYLOAD_RELEASE_TAG:-$INPUT_RELEASE_TAG}"
+          openmanet_version="${PAYLOAD_OPENMANET_VERSION:-${INPUT_OPENMANET_VERSION:-1.6.5}}"
+          board="${PAYLOAD_BOARD:-${INPUT_BOARD:-ekh-bcm2711}}"
+          target="${PAYLOAD_TARGET:-${INPUT_TARGET:-rpi4-mm6108-spi}}"
+          jobs="${PAYLOAD_JOBS:-${INPUT_JOBS:-2}}"
+          source_repo="${PAYLOAD_SOURCE_REPO:-unknown}"
+          source_ref="${PAYLOAD_SOURCE_REF:-unknown}"
+          source_sha="${PAYLOAD_SOURCE_SHA:-unknown}"
+          gh workflow run image-release.yml             --repo "$GITHUB_REPOSITORY"             --field release_tag="$release_tag"             --field openmanet_version="$openmanet_version"             --field board="$board"             --field target="$target"             --field jobs="$jobs"             --field source_repo="$source_repo"             --field source_ref="$source_ref"             --field source_sha="$source_sha"

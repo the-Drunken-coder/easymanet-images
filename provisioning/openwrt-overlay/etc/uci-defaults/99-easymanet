@@ -1,0 +1,24 @@
+#!/bin/sh
+# EasyMANET first-boot provisioning trigger.
+# Runs once via /etc/uci-defaults/ and delegates all work to provision.sh.
+
+set -eu
+
+PROVISION_SCRIPT="/usr/lib/easymanet/provision.sh"
+
+if [ ! -x "$PROVISION_SCRIPT" ]; then
+    logger -t easymanet "missing $PROVISION_SCRIPT"
+    exit 1
+fi
+
+set +e
+/bin/sh "$PROVISION_SCRIPT"
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
+    logger -t easymanet "provisioning complete"
+    exit 0
+fi
+
+logger -t easymanet "provisioning failed with rc=$rc"
+exit "$rc"

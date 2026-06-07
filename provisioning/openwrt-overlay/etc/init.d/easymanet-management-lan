@@ -1,0 +1,22 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+
+run_repair() {
+    sleep 25
+    EASYMANET_LIB_DIR=/usr/lib/easymanet
+    . /usr/lib/easymanet/network.sh
+    easymanet_repair_management_lan late-boot
+    if [ -f /usr/lib/easymanet/boot-report.sh ]; then
+        . /usr/lib/easymanet/boot-report.sh
+        write_easymanet_boot_report post-management-lan
+    fi
+}
+
+boot() {
+    run_repair &
+}
+
+start() {
+    run_repair &
+}

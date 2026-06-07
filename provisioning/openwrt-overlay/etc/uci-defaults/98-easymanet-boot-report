@@ -1,0 +1,8 @@
+#!/bin/sh
+# Enable EasyMANET boot diagnostics.
+
+if [ -x /etc/init.d/easymanet-boot-report ]; then
+    /etc/init.d/easymanet-boot-report enable 2>/dev/null || true
+fi
+
+exit 0

@@ -1,0 +1,50 @@
+version: 1
+
+mesh:
+  id: field-deployment-alpha
+  password: "strong-mesh-password-here"
+  channel: 36
+  bandwidth_mhz: 4
+  country: US
+
+defaults:
+  target: rpi4-mm6108-spi
+
+  local_ap:
+    enabled: true
+    password: "local-ap-password"
+
+  management:
+    root_password_hash: ""
+    ssh_authorized_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKm8abcdefgh"
+
+nodes:
+  gate01:
+    role: gate
+    hostname: gate01
+    ip: 10.41.1.1
+
+    local_ap:
+      ssid: gate01-local
+
+    gateway:
+      enabled: true
+      # eth0 is shared: wired management stays on br-lan, WAN DHCP also uses br-lan.
+      uplink_interface: eth0
+
+  point01:
+    role: point
+    hostname: point01
+    ip: 10.41.2.1
+
+    local_ap:
+      ssid: point01-local
+
+  point02:
+    role: point
+    hostname: point02
+    ip: 10.41.3.1
+
+    local_ap:
+      ssid: point02-local

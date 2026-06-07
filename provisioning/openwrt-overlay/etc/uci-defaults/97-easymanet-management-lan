@@ -1,0 +1,7 @@
+#!/bin/sh
+
+if [ -x /etc/init.d/easymanet-management-lan ]; then
+    /etc/init.d/easymanet-management-lan enable
+fi
+
+exit 0
