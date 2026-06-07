@@ -54,12 +54,12 @@ jobs:
           df -h
 
       - name: Check out repository
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: "3.11"
 
@@ -76,7 +76,7 @@ jobs:
 
       - name: Restore OpenMANET build cache
         id: openmanet-cache
-        uses: actions/cache/restore@a7833574556fa59680c1b7cb190c1735db73ebf0
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
           path: .openmanet-cache
           key: openmanet-docker-cache-v1-${{ runner.os }}-${{ inputs.board }}-${{ inputs.openmanet_version }}-${{ hashFiles('easymanet/build.py', 'pyproject.toml', 'provisioning/extra-packages.txt', 'provisioning/openwrt-overlay/**') }}
@@ -122,14 +122,14 @@ jobs:
 
       - name: Save OpenMANET build cache
         if: steps.build_image.outcome == 'success' && steps.openmanet-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@a7833574556fa59680c1b7cb190c1735db73ebf0
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
           path: .openmanet-cache
           key: ${{ steps.openmanet-cache.outputs.cache-primary-key }}
 
       - name: Upload firmware artifact
         if: steps.build_image.outcome == 'success'
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: openmanet-${{ inputs.openmanet_version }}-${{ inputs.target }}
           path: dist/*.img.gz
