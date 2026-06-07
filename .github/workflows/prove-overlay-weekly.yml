@@ -63,7 +63,7 @@ jobs:
 
       - name: Restore OpenMANET build cache
         id: openmanet-cache
-        uses: actions/cache/restore@a7833574556fa59680c1b7cb190c1735db73ebf0
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
           path: .openmanet-cache
           key: openmanet-docker-cache-v1-${{ runner.os }}-${{ env.BOARD }}-${{ env.OPENMANET_VERSION }}-${{ hashFiles('easymanet/build.py', 'pyproject.toml', 'provisioning/**') }}
@@ -87,7 +87,7 @@ jobs:
 
       - name: Save OpenMANET build cache
         if: success() && steps.openmanet-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@a7833574556fa59680c1b7cb190c1735db73ebf0
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
           path: .openmanet-cache
           key: ${{ steps.openmanet-cache.outputs.cache-primary-key }}
