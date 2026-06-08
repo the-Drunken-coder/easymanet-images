@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-OVERLAY = ROOT / "provisioning" / "openwrt-overlay"
+OVERLAY = ROOT / "images" / "openmanet" / "provisioning" / "openwrt-overlay"
 PROVISION_SCRIPT = OVERLAY / "usr" / "lib" / "easymanet" / "provision.sh"
 PROVISION_LIB = OVERLAY / "usr" / "lib" / "easymanet" / "provision-lib.sh"
 
@@ -28,10 +28,25 @@ def test_firstboot_fails_if_root_password_hash_not_applied():
     text = PROVISION_SCRIPT.read_text()
     assert "failed to set root password hash in /etc/shadow" in text
     shadow_block = text.split("Setting root password hash")[1].split("Configuring mesh")[0]
-    assert 'sed -i "s|^root:.*|root:${ROOT_PW_HASH}' in shadow_block
+    assert 'write_root_shadow_hash "$shadow_path" "$ROOT_PW_HASH"' in shadow_block
     assert "shadow_path" in shadow_block
     assert "failed to set root password hash" in shadow_block
-    assert "|| true" not in shadow_block.split("sed -i")[1].split("fi")[0]
+    assert "sed -i" not in shadow_block
+    assert "|| true" not in shadow_block.split("write_root_shadow_hash")[1].split("fi")[0]
+
+
+def test_firstboot_creates_shadow_temp_file_with_restrictive_umask():
+    text = PROVISION_SCRIPT.read_text()
+    write_block = text.split("write_root_shadow_hash() {", 1)[1].split(
+        "wipe_boot_provision_json() {", 1
+    )[0]
+
+    assert 'old_umask="$(umask)"' in write_block
+    assert "umask 077" in write_block
+    assert ': > "$tmp_path"' in write_block
+    assert 'umask "$old_umask"' in write_block
+    assert write_block.index("umask 077") < write_block.index(': > "$tmp_path"')
+    assert write_block.index(': > "$tmp_path"') < write_block.index('umask "$old_umask"')
 
 
 def test_uci_defaults_propagates_provision_failure_rc():
@@ -115,6 +130,15 @@ def test_boot_report_hook_is_packaged_and_enabled():
     assert "boot-report-latest" in report_text
     assert "easymanet_redact_uci_wireless" in report_text
     assert "easymanet_redact_uci_mesh11sd" in report_text
+    secret_fields = next(
+        line for line in report_text.splitlines() if line.startswith("MESH11SD_SECRET_FIELDS=")
+    )
+    assert "priv_key_pwd" in secret_fields
+    assert "priv_key_pwd" in report_text
+    assert "auto_mesh_id" in report_text
+    assert "auto_mesh_key" in report_text
+    assert "mesh_gate_key" in report_text
+    assert "vtun_gate_key" in report_text
     assert 'run_report_cmd "$latest/uci-mesh11sd.txt" easymanet_redact_uci_mesh11sd' in report_text
     assert 'easymanet_redact_config_mesh11sd > "$latest/config-mesh11sd"' in report_text
     assert 'cp /etc/easymanet/provision.json' not in report_text

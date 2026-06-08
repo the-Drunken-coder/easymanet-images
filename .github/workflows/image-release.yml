@@ -65,7 +65,7 @@ jobs:
           df -h
 
       - name: Check out repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
 
@@ -90,7 +90,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
           path: .openmanet-cache
-          key: openmanet-docker-cache-v1-${{ runner.os }}-${{ inputs.board }}-${{ inputs.openmanet_version }}-${{ hashFiles('easymanet/build.py', 'pyproject.toml', 'provisioning/extra-packages.txt', 'provisioning/openwrt-overlay/**') }}
+          key: openmanet-docker-cache-v1-${{ runner.os }}-${{ inputs.board }}-${{ inputs.openmanet_version }}-${{ hashFiles('easymanet/build.py', 'packages/image/src/easymanet_image/build.py', 'pyproject.toml', 'provisioning/extra-packages.txt', 'images/openmanet/provisioning/extra-packages.txt', 'provisioning/openwrt-overlay/**', 'images/openmanet/provisioning/openwrt-overlay/**') }}
           restore-keys: |
             openmanet-docker-cache-v1-${{ runner.os }}-${{ inputs.board }}-${{ inputs.openmanet_version }}-
             openmanet-docker-cache-v1-${{ runner.os }}-${{ inputs.board }}-
@@ -158,6 +158,9 @@ jobs:
               sha_path = path.with_suffix(path.suffix + ".sha256")
               sha_path.write_text(f"{digest}  {path.name}\n")
               artifacts.append({"name": path.name, "sha256": digest, "bytes": path.stat().st_size})
+
+          if not artifacts:
+              raise SystemExit("No firmware artifacts (*.img.gz) were produced")
 
           manifest = {
               "schema_version": 1,

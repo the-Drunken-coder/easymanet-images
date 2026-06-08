@@ -1,5 +1,6 @@
 """Packaging tests for installed overlay artifacts."""
 
+import importlib.util
 import os
 import stat
 import subprocess
@@ -10,7 +11,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OVERLAY_INSTALL_ROOT = Path("share/easymanet/provisioning/openwrt-overlay")
+OVERLAY_INSTALL_ROOT = Path("share/easymanet/images/openmanet/provisioning/openwrt-overlay")
 EXECUTABLE_OVERLAY_FILES = [
     "etc/init.d/easymanet-boot-report",
     "etc/init.d/easymanet-management-lan",
@@ -22,6 +23,16 @@ EXECUTABLE_OVERLAY_FILES = [
     "usr/lib/easymanet/provision.sh",
 ]
 PACKAGING_COMMAND_TIMEOUT = 180
+
+
+def _load_release_smoke_module():
+    spec = importlib.util.spec_from_file_location(
+        "release_smoke", ROOT / "tools" / "release_smoke.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 def _run_packaging_command(args, env):
@@ -83,3 +94,36 @@ def test_installed_wheel_preserves_overlay_executable_modes(tmp_path):
         installed = install_dir / OVERLAY_INSTALL_ROOT / rel_path
         assert installed.exists(), rel_path
         assert installed.stat().st_mode & stat.S_IXUSR, rel_path
+
+
+def test_release_smoke_installs_wheel_in_temp_venv(tmp_path):
+    env = os.environ.copy()
+    env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+
+    result = _run_packaging_command(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "release_smoke.py"),
+            "--temp-root",
+            str(tmp_path / "release-smoke"),
+            "--skip-electron",
+        ],
+        env=env,
+    )
+
+    assert "Release smoke passed." in result.stdout
+
+
+def test_release_smoke_run_passes_timeout_to_subprocess(monkeypatch):
+    release_smoke = _load_release_smoke_module()
+    captured = {}
+
+    def fake_run(*args, **kwargs):
+        captured["timeout"] = kwargs["timeout"]
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(release_smoke.subprocess, "run", fake_run)
+
+    release_smoke.run(["echo", "ok"], timeout=7)
+
+    assert captured["timeout"] == 7

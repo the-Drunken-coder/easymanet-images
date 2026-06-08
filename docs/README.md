@@ -9,6 +9,9 @@ blockers that another agent or developer may need to pick up.
 | Location | What it holds | Use it when... |
 | --- | --- | --- |
 | [`docs/architecture.md`](architecture.md) | End-to-end provisioning flow and component responsibilities. | "How is EasyMANET wired together?" |
+| [`docs/monorepo.md`](monorepo.md) | Private monorepo layout, product surfaces, and public export behavior. | "Where does each product surface live?" |
+| [`docs/release.md`](release.md) | Version policy, release checklist, and artifact commands. | "How do we cut the first release?" |
+| [`docs/sample-fleet.md`](sample-fleet.md) | Starter fleet YAML and workspace copy command. | "What should my first fleet file look like?" |
 | [`docs/manifest.md`](manifest.md) | Reference for every field in `fleet.yml`. | "What config shape does this project accept?" |
 | [`docs/flashing.md`](flashing.md) | Host-side flashing and provisioning guide. | "How do I safely flash a node?" |
 | [`docs/openmanet-config-investigation.md`](openmanet-config-investigation.md) | Notes on OpenMANET wizard behavior and config files. | "What does OpenMANET expect on the device?" |
@@ -33,4 +36,4 @@ Start templates:
 ## Root Files
 
 - **`README.md`** - project overview, quick start, and command map.
-- **`pyproject.toml`** - package metadata, CLI entry point, and test dependencies.
+- **`pyproject.toml`** - package metadata, entry points, source roots, and test dependencies.

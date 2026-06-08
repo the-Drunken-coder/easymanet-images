@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
 
@@ -30,19 +30,28 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Import smoke test
-        run: python -c "import easymanet; from easymanet.cli import app"
+        run: easymanet --help
 
       - name: Run unit tests
         run: pytest -q --cov=easymanet --cov-report=term-missing --cov-fail-under=50
 
       - name: Syntax-check overlay shell scripts
         run: |
-          find provisioning/openwrt-overlay \
+          overlay_dir=provisioning/openwrt-overlay
+          if [ ! -d "$overlay_dir" ]; then
+            overlay_dir=images/openmanet/provisioning/openwrt-overlay
+          fi
+          find "$overlay_dir" \
             \( -name '*.sh' -o -path '*/etc/init.d/*' -o -path '*/etc/uci-defaults/*' \) \
             -type f -print0 | xargs -0 sh -n
 
       - name: Verify overlay files are packaged
-        run: python scripts/verify_overlay_packaging.py
+        run: |
+          if [ -f tools/packaging/verify_overlay_packaging.py ]; then
+            python tools/packaging/verify_overlay_packaging.py
+          else
+            python scripts/verify_overlay_packaging.py
+          fi
 
   package:
     name: Package smoke
@@ -51,7 +60,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
 

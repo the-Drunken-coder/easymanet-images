@@ -2,12 +2,18 @@
 
 import pytest
 
-from easymanet.privileges import PrivilegeError, check_privileges
+from easymanet.privileges import PrivilegeError, check_privileges, is_running_as_root
 
 
 def test_check_privileges_allows_root(monkeypatch):
     monkeypatch.setattr("easymanet.privileges.is_running_as_root", lambda: True)
     check_privileges("/dev/sdb")
+
+
+def test_is_running_as_root_returns_false_without_geteuid(monkeypatch):
+    monkeypatch.delattr("easymanet.privileges.os.geteuid", raising=False)
+
+    assert is_running_as_root() is False
 
 
 def test_check_privileges_allows_writable_device_on_linux(monkeypatch):

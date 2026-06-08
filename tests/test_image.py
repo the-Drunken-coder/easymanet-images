@@ -113,6 +113,31 @@ def test_reread_partition_table_surfaces_command_failure(monkeypatch):
         (
             ["blockdev", "--rereadpt", "/dev/sdb"],
             {"capture_output": True, "text": True, "timeout": 30, "check": True},
+        ),
+        (
+            ["partprobe", "/dev/sdb"],
+            {"capture_output": True, "text": True, "timeout": 30, "check": True},
+        ),
+    ]
+
+
+def test_reread_partition_table_skips_partprobe_when_blockdev_succeeds(monkeypatch):
+    run_calls = []
+
+    def fake_run(cmd, **kwargs):
+        run_calls.append((cmd, kwargs))
+
+    monkeypatch.setattr("easymanet.image.is_linux", lambda: True)
+    monkeypatch.setattr("easymanet.image.is_macos", lambda: False)
+    monkeypatch.setattr("easymanet.image._tool_path", lambda name: name)
+    monkeypatch.setattr("easymanet.image.subprocess.run", fake_run)
+
+    _reread_partition_table("/dev/sdb")
+
+    assert run_calls == [
+        (
+            ["blockdev", "--rereadpt", "/dev/sdb"],
+            {"capture_output": True, "text": True, "timeout": 30, "check": True},
         )
     ]
 

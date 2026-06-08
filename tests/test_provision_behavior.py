@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-OVERLAY = ROOT / "provisioning" / "openwrt-overlay"
+OVERLAY = ROOT / "images" / "openmanet" / "provisioning" / "openwrt-overlay"
 PROVISION_LIB = OVERLAY / "usr" / "lib" / "easymanet" / "provision-lib.sh"
 PROVISION_SCRIPT = OVERLAY / "usr" / "lib" / "easymanet" / "provision.sh"
 NETWORK_SCRIPT = OVERLAY / "usr" / "lib" / "easymanet" / "network.sh"
@@ -292,6 +292,37 @@ def test_provision_point_node_disables_ssh(tmp_path):
 
     dropbear_state = (prefix / "var" / "dropbear-state").read_text()
     assert "disabled" in dropbear_state
+
+
+def test_provision_writes_valid_root_password_hash(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    provision_data = _gate_provision_json()
+    provision_data["management"]["root_password_hash"] = "$6$abc/DEF.123"
+
+    result = _run_provision(prefix, provision_data, uci_state)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "root:$6$abc/DEF.123:19000:0:99999:7:::" in (
+        prefix / "etc" / "shadow"
+    ).read_text()
+
+
+def test_provision_rejects_invalid_root_password_hash_characters(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    provision_data = _gate_provision_json()
+    provision_data["management"]["root_password_hash"] = "$6$bad:shadow"
+
+    result = _run_provision(prefix, provision_data, uci_state)
+
+    assert result.returncode != 0
+    assert "failed to set root password hash in /etc/shadow" in result.stdout
+    assert "Invalid root password hash characters" in (
+        prefix / "var" / "log" / "easymanet.log"
+    ).read_text()
 
 
 def test_provision_reapplies_mesh_channel_after_network_restart(tmp_path):

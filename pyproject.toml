@@ -41,41 +41,67 @@ dev = [
 ]
 
 [project.scripts]
-easymanet = "easymanet.cli:app"
+easymanet = "easymanet_cli.app:main"
+easymanet-desktop = "easymanet_desktop.server:main"
+easymanet-publish = "easymanet_publish.cli:app"
 
 [tool.setuptools.packages.find]
-include = ["easymanet*"]
+where = [
+    "packages/core/src",
+    "packages/image/src",
+    "apps/cli/src",
+    "apps/desktop/src",
+    "tools/publish/src",
+]
+include = [
+    "easymanet*",
+    "easymanet_cli*",
+    "easymanet_image*",
+    "easymanet_desktop*",
+    "easymanet_publish*",
+]
+
+[tool.setuptools.package-data]
+"easymanet_desktop" = ["static/*"]
+"easymanet_publish" = ["templates/*/.github/workflows/*.yml"]
 
 [tool.setuptools.data-files]
-"share/easymanet/provisioning" = [
-    "provisioning/extra-packages.txt",
+"share/easymanet/images/openmanet/provisioning" = [
+    "images/openmanet/provisioning/extra-packages.txt",
 ]
-"share/easymanet/provisioning/openwrt-overlay" = [
-    "provisioning/openwrt-overlay/README.md",
+"share/easymanet/images/openmanet/provisioning/openwrt-overlay" = [
+    "images/openmanet/provisioning/openwrt-overlay/README.md",
 ]
-"share/easymanet/provisioning/openwrt-overlay/etc/easymanet" = [
-    "provisioning/openwrt-overlay/etc/easymanet/provision.json",
+"share/easymanet/images/openmanet/provisioning/openwrt-overlay/etc/easymanet" = [
+    "images/openmanet/provisioning/openwrt-overlay/etc/easymanet/provision.json",
 ]
-"share/easymanet/provisioning/openwrt-overlay/etc/init.d" = [
-    "provisioning/openwrt-overlay/etc/init.d/easymanet-boot-report",
-    "provisioning/openwrt-overlay/etc/init.d/easymanet-management-lan",
+"share/easymanet/images/openmanet/provisioning/openwrt-overlay/etc/init.d" = [
+    "images/openmanet/provisioning/openwrt-overlay/etc/init.d/easymanet-boot-report",
+    "images/openmanet/provisioning/openwrt-overlay/etc/init.d/easymanet-management-lan",
 ]
-"share/easymanet/provisioning/openwrt-overlay/etc/sysctl.d" = [
-    "provisioning/openwrt-overlay/etc/sysctl.d/99-easymanet.conf",
+"share/easymanet/images/openmanet/provisioning/openwrt-overlay/etc/sysctl.d" = [
+    "images/openmanet/provisioning/openwrt-overlay/etc/sysctl.d/99-easymanet.conf",
 ]
-"share/easymanet/provisioning/openwrt-overlay/etc/uci-defaults" = [
-    "provisioning/openwrt-overlay/etc/uci-defaults/97-easymanet-management-lan",
-    "provisioning/openwrt-overlay/etc/uci-defaults/98-easymanet-boot-report",
-    "provisioning/openwrt-overlay/etc/uci-defaults/99-easymanet",
+"share/easymanet/images/openmanet/provisioning/openwrt-overlay/etc/uci-defaults" = [
+    "images/openmanet/provisioning/openwrt-overlay/etc/uci-defaults/97-easymanet-management-lan",
+    "images/openmanet/provisioning/openwrt-overlay/etc/uci-defaults/98-easymanet-boot-report",
+    "images/openmanet/provisioning/openwrt-overlay/etc/uci-defaults/99-easymanet",
 ]
-"share/easymanet/provisioning/openwrt-overlay/usr/lib/easymanet" = [
-    "provisioning/openwrt-overlay/usr/lib/easymanet/boot-report.sh",
-    "provisioning/openwrt-overlay/usr/lib/easymanet/network.sh",
-    "provisioning/openwrt-overlay/usr/lib/easymanet/provision-lib.sh",
-    "provisioning/openwrt-overlay/usr/lib/easymanet/provision.sh",
+"share/easymanet/images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet" = [
+    "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/boot-report.sh",
+    "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/network.sh",
+    "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/provision-lib.sh",
+    "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/provision.sh",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-pythonpath = ["."]
+pythonpath = [
+    "packages/core/src",
+    "packages/image/src",
+    "apps/cli/src",
+    "apps/desktop/src",
+    "tools/publish/src",
+    ".",
+]

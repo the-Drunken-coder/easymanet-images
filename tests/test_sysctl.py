@@ -4,6 +4,8 @@ from pathlib import Path
 def test_sysctl_drop_in_ships_tcp_tuning():
     path = (
         Path(__file__).resolve().parents[1]
+        / "images"
+        / "openmanet"
         / "provisioning"
         / "openwrt-overlay"
         / "etc"

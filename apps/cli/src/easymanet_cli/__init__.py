@@ -1,0 +1,1 @@
+"""Installable EasyMANET CLI surface."""

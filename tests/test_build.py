@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from easymanet import build
+from easymanet_image import build
 
 
 def test_dockerfile_contents_include_core_packages():
@@ -154,7 +154,15 @@ def test_overlay_dir_falls_back_to_installed_data(monkeypatch, tmp_path):
     fake_package = fake_site / "easymanet"
     fake_package.mkdir(parents=True)
     fake_file = fake_package / "build.py"
-    installed = tmp_path / "venv" / "share" / "easymanet" / "provisioning"
+    installed = (
+        tmp_path
+        / "venv"
+        / "share"
+        / "easymanet"
+        / "images"
+        / "openmanet"
+        / "provisioning"
+    )
 
     monkeypatch.setattr(build, "__file__", str(fake_file))
     monkeypatch.setattr(build.sys, "prefix", str(tmp_path / "venv"))

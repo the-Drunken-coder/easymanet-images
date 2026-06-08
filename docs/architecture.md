@@ -39,8 +39,30 @@ network restart + boot report ──→ node is ready
 
 ## Component Responsibilities
 
-### CLI (`cli.py`)
-Entry point. Dispatches commands: `disks`, `validate`, `render`, `flash`.
+### Core (`packages/core/src/easymanet/`)
+Shared domain code for fleet manifests, validation, rendering, disk safety,
+flashing, boot-payload injection, shared workspace paths, local image cache
+state, and platform helpers.
+
+### CLI (`apps/cli/src/easymanet_cli/`)
+Installable automation surface. Dispatches commands: `disks`, `validate`,
+`render`, `flash`, workspace discovery commands, and the image subcommands
+exposed by `easymanet_image`.
+
+### Image Surface (`packages/image/src/easymanet_image/`)
+OpenMANET image builder, image command registration, and release metadata
+generation. Owns the firmware build workflow and the image release manifest.
+
+### Desktop Surface (`apps/desktop/electron/`, `apps/desktop/src/easymanet_desktop/`)
+Local-first Electron operator console. It loads UI files from disk, exposes a
+narrow preload API, and calls the Python desktop bridge for state, disk
+discovery, shared workspace fleet discovery, and fleet validation. The Python
+`easymanet-desktop serve` command keeps a browser-served fallback for
+development and smoke testing.
+
+### Publish Surface (`tools/publish/src/easymanet_publish/`)
+Exports generated public product surfaces locally. It does not configure public
+subrepositories or credentials.
 
 ### Manifest (`manifest.py`)
 Parses `fleet.yml` into a structured Python object. Provides accessor
@@ -67,7 +89,7 @@ display. Handles unmounting, sync, and eject.
 Mounts only the FAT boot partition after flashing and writes the
 node-specific `/easymanet/provision.json` payload there.
 
-### First-boot scripts (`provisioning/openwrt-overlay/`)
+### First-boot scripts (`images/openmanet/provisioning/openwrt-overlay/`)
 Shipped in the OpenWrt `files/` overlay and baked into the firmware image:
 - `etc/uci-defaults/99-easymanet`: UCI defaults trigger that calls `provision.sh`.
 - `usr/lib/easymanet/provision.sh`: Generic shell script that finds the
@@ -113,4 +135,4 @@ contains the EasyMANET first-boot hooks. Build those files into the
 firmware image using the OpenWrt/OpenMANET `files/` overlay mechanism.
 This repo keeps the reusable overlay under:
 
-`provisioning/openwrt-overlay/`
+`images/openmanet/provisioning/openwrt-overlay/`

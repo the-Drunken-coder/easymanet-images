@@ -21,7 +21,7 @@ This command uses Docker to:
 
 1. Build a reusable Ubuntu 24.04 builder image with the OpenWrt toolchain.
 2. Clone or refresh the cached OpenMANET source tree in the Docker cache.
-3. Copy `provisioning/openwrt-overlay/` into the firmware tree's `files/`.
+3. Copy `images/openmanet/provisioning/openwrt-overlay/` into the firmware tree's `files/`.
 4. Run `./scripts/openmanet_setup.sh -i -b ekh-bcm2711`.
 5. Run `make download -jN` and `make -jN V=s`.
 6. Copy the resulting `openmanet-*-rpi4-mm6108-spi-squashfs-sysupgrade.img.gz`
@@ -210,7 +210,7 @@ decommissioning nodes.
 | Boot payload staging failed | Re-run the full `easymanet flash` command after verifying the boot partition mounts |
 | Image won't boot | Verify the base image matches your hardware (RPi4 + MM6108 SPI) by writing it directly first, without EasyMANET injection. |
 | `gzip` reports `trailing garbage ignored` for an OpenWrt/OpenMANET sysupgrade image | This is expected. OpenWrt appends sysupgrade metadata after the gzip payload. EasyMANET validates the gzip payload but allows the metadata trailer. |
-| EasyMANET payload is present on the boot partition but the node still launches the normal wizard | The base image does not yet include the EasyMANET first-boot hooks. Rebuild the firmware image with `easymanet image build` or `provisioning/openwrt-overlay/` in the OpenMANET `files/` tree. |
+| EasyMANET payload is present on the boot partition but the node still launches the normal wizard | The base image does not yet include the EasyMANET first-boot hooks. Rebuild the firmware image with `easymanet image build`, or copy `images/openmanet/provisioning/openwrt-overlay/` into the OpenMANET `files/` tree before building manually. |
 
 EasyMANET validates `.img.gz` payloads before flashing. A corrupt cached
 download is skipped during automatic image resolution and deleted before
@@ -223,4 +223,4 @@ approach is invalid for standard OpenWrt/OpenMANET SquashFS images.
 The current `flash` command assumes the base image already includes the
 EasyMANET first-boot hooks. Those files live in this repo under:
 
-`provisioning/openwrt-overlay/`
+`images/openmanet/provisioning/openwrt-overlay/`

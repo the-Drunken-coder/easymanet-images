@@ -198,7 +198,7 @@ def test_linux_root_block_devices_uses_findmnt(monkeypatch):
 
     related = disks._linux_root_block_devices()
 
-    assert calls == sorted(disks._SYS_MOUNT_POINTS)
+    assert calls == sorted(disks.SYS_MOUNT_POINTS)
     assert "/dev/nvme0n1p3" in related
     assert "/dev/nvme0n1" in related
 
@@ -364,7 +364,7 @@ def test_get_partition2_wipe_range_macos_without_list_offset(monkeypatch):
     result = disks.get_partition2_wipe_range("/dev/disk4")
     assert result is not None
     start_bytes, wipe_bytes = result
-    max_wipe = disks._OVERLAY_WIPE_BLOCK_MIB * disks._OVERLAY_WIPE_BLOCKS * 1024 * 1024
+    max_wipe = disks.OVERLAY_WIPE_BLOCK_MIB * disks.OVERLAY_WIPE_BLOCKS * 1024 * 1024
     part2_size = 4290772992
     assert wipe_bytes == min(part2_size, max_wipe)
     assert start_bytes == 75497472 + part2_size - wipe_bytes
@@ -482,7 +482,7 @@ def test_unmount_disk_macos_raises_when_force_unmount_fails(monkeypatch):
 def test_get_partition2_wipe_range_linux(monkeypatch, linux_platform):
     part2_start = 270336 * 512
     part2_size = 10_000_000_000
-    max_wipe = disks._OVERLAY_WIPE_BLOCK_MIB * disks._OVERLAY_WIPE_BLOCKS * 1024 * 1024
+    max_wipe = disks.OVERLAY_WIPE_BLOCK_MIB * disks.OVERLAY_WIPE_BLOCKS * 1024 * 1024
     lsblk_output = {
         "blockdevices": [
             {

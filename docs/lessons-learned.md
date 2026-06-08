@@ -20,9 +20,9 @@ debugging path.
 
   ```sh
   pytest -q
-  sh -n provisioning/openwrt-overlay/usr/lib/easymanet/provision.sh
-  sh -n provisioning/openwrt-overlay/usr/lib/easymanet/network.sh
-  sh -n provisioning/openwrt-overlay/usr/lib/easymanet/boot-report.sh
+  sh -n images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/provision.sh
+  sh -n images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/network.sh
+  sh -n images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/boot-report.sh
   ```
 
 - Only run the full firmware workflow when a flashable image is needed:
@@ -61,7 +61,7 @@ debugging path.
 - The current flashing command shape is:
 
   ```sh
-  sudo python3 -m easymanet.cli flash \
+  sudo easymanet flash \
     --config examples/fleet.yml \
     --node manet01 \
     --device /dev/disk4 \
@@ -649,7 +649,7 @@ Observed symptom:
 
 Fix committed in `16ea990`:
 
-- `easymanet/image.py` calls `_clear_stale_overlay(device)` **after**
+- `packages/core/src/easymanet/image.py` calls `_clear_stale_overlay(device)` **after**
   writing the image (so the new partition table is in place).
 - `_clear_stale_overlay` uses `get_partition2_wipe_range()` to seek to
   partition 2 and zero that region (up to the partition size, capped at
@@ -723,7 +723,7 @@ When build `25678707977` finishes:
    should zero stale overlay first.
 3. Flash `manet01` gateway:
    ```bash
-   sudo python3 -m easymanet.cli flash \
+   sudo easymanet flash \
      --config examples/fleet.yml \
      --node manet01 \
      --device /dev/diskX \
@@ -732,7 +732,7 @@ When build `25678707977` finishes:
    ```
 4. Flash `manet02` point:
    ```bash
-   sudo python3 -m easymanet.cli flash \
+   sudo easymanet flash \
      --config examples/fleet.yml \
      --node manet02 \
      --device /dev/diskX \

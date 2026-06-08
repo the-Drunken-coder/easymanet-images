@@ -3,26 +3,57 @@
 import pytest
 import typer
 
-from easymanet import cli_flash, cli_image
-from easymanet.cli import _resolve_flash_ssh_enabled
-from easymanet.cli_flash import (
+from easymanet_cli import flash as cli_flash
+from easymanet_cli.flash import (
     CUSTOM_IMAGE_VERSION,
     REDACTED_VALUE,
     redact_provision_for_display,
     resolve_base_image,
+    resolve_flash_ssh_enabled,
 )
+from easymanet_image import cli as cli_image
+
+
+FIELD_FLEET_YAML = """\
+version: 1
+
+mesh:
+  id: field
+  password: test-password
+  channel: 36
+  bandwidth_mhz: 4
+  country: US
+
+defaults:
+  target: rpi4-mm6108-spi
+  local_ap:
+    enabled: true
+    password: test-local-password
+  management:
+    root_password_hash: ""
+    ssh_authorized_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKm8abcdefgh"
+
+nodes:
+  point01:
+    role: point
+    hostname: point01
+    ip: 10.41.2.1
+    local_ap:
+      ssid: point01-local
+"""
 
 
 def test_resolve_flash_ssh_disable_overrides_gate():
-    assert _resolve_flash_ssh_enabled(enable_ssh=False, disable_ssh=True) is False
+    assert resolve_flash_ssh_enabled(enable_ssh=False, disable_ssh=True) is False
 
 
 def test_resolve_flash_ssh_enable_overrides_point():
-    assert _resolve_flash_ssh_enabled(enable_ssh=True, disable_ssh=False) is True
+    assert resolve_flash_ssh_enabled(enable_ssh=True, disable_ssh=False) is True
 
 
 def test_resolve_flash_ssh_role_defaults():
-    assert _resolve_flash_ssh_enabled(enable_ssh=False, disable_ssh=False) is None
+    assert resolve_flash_ssh_enabled(enable_ssh=False, disable_ssh=False) is None
 
 
 def test_redact_provision_for_display_hides_secret_values():
@@ -64,7 +95,7 @@ def test_redact_provision_for_display_hides_secret_values():
 def test_flash_ssh_flags_mutually_exclusive():
     from typer.testing import CliRunner
 
-    from easymanet.cli import app
+    from easymanet_cli.app import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -89,7 +120,7 @@ def test_flash_ssh_flags_mutually_exclusive():
 def test_flash_download_flags_mutually_exclusive():
     from typer.testing import CliRunner
 
-    from easymanet.cli import app
+    from easymanet_cli.app import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -114,7 +145,7 @@ def test_flash_download_flags_mutually_exclusive():
 def test_image_set_url_requires_sha256():
     from typer.testing import CliRunner
 
-    from easymanet.cli import app
+    from easymanet_cli.app import app
 
     result = CliRunner().invoke(
         app,
@@ -214,7 +245,7 @@ def test_flash_download_missing_url_hint_mentions_sha256(monkeypatch, capsys):
 def test_image_empty_config_hint_mentions_sha256(monkeypatch):
     from typer.testing import CliRunner
 
-    from easymanet.cli import app
+    from easymanet_cli.app import app
 
     monkeypatch.setattr(cli_image, "maybe_show_update_notice", lambda: None)
     monkeypatch.setattr(cli_image, "get_image_config", lambda _target: None)
@@ -226,10 +257,53 @@ def test_image_empty_config_hint_mentions_sha256(monkeypatch):
     assert "easymanet image --set-url <URL> --set-sha256 <SHA256>" in result.output
 
 
+def test_cli_init_and_fleets_use_shared_workspace(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from easymanet_cli.app import app
+    from easymanet.workspace import WORKSPACE_ENV
+
+    workspace = tmp_path / "EasyMANET"
+    monkeypatch.setenv(WORKSPACE_ENV, str(workspace))
+    result = CliRunner().invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "EasyMANET workspace ready." in result.output
+    assert (workspace / "Fleets").is_dir()
+
+    (workspace / "Fleets" / "field.yml").write_text(FIELD_FLEET_YAML)
+    result = CliRunner().invoke(app, ["fleets"])
+
+    assert result.exit_code == 0
+    assert f"Fleets folder: {workspace / 'Fleets'}" in result.output
+    assert "field.yml" in result.output
+
+
+def test_cli_validate_resolves_fleet_name_from_workspace(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from easymanet_cli.app import app
+    from easymanet.workspace import WORKSPACE_ENV, ensure_workspace
+
+    workspace = tmp_path / "EasyMANET"
+    monkeypatch.setenv(WORKSPACE_ENV, str(workspace))
+    ensure_workspace()
+    fleet = workspace / "Fleets" / "field.yml"
+    fleet.write_text(FIELD_FLEET_YAML)
+
+    result = CliRunner().invoke(
+        app,
+        ["validate", "--config", "field", "--node", "point01"],
+    )
+
+    assert result.exit_code == 0
+    assert f"Validating: {fleet}" in result.output
+
+
 def test_flash_exits_when_finish_flash_reports_eject_failure(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
-    from easymanet.cli import app
+    from easymanet_cli.app import app
 
     image = tmp_path / "openmanet.img.gz"
     image.write_bytes(b"firmware")
@@ -292,9 +366,9 @@ def test_flash_exits_when_finish_flash_reports_eject_failure(tmp_path, monkeypat
 def test_image_build_chains_build_error(monkeypatch):
     from typer.testing import CliRunner
 
-    from easymanet import cli_image
-    from easymanet.build import BuildError
-    from easymanet.cli import app
+    from easymanet_image import cli as cli_image
+    from easymanet_image.build import BuildError
+    from easymanet_cli.app import app
 
     def fail_build(**kwargs):
         del kwargs
