@@ -281,157 +281,197 @@ def register_flash_command(app: typer.Typer) -> None:
         ),
     ):
         """Flash an OpenMANET image and stage node config on the boot partition."""
-        check_platform()
-        if enable_ssh and disable_ssh:
-            typer.secho(
-                "Cannot use --enable-ssh and --disable-ssh together.",
-                fg=typer.colors.RED,
-            )
-            raise typer.Exit(1)
-        if download and no_download:
-            typer.secho(
-                "Cannot use --download and --no-download together.",
-                fg=typer.colors.RED,
-            )
-            raise typer.Exit(1)
-        if not yes and not dry_run:
-            typer.secho(
-                "--yes is required to flash. Use --dry-run to preview first.",
-                fg=typer.colors.YELLOW,
-            )
-            raise typer.Exit(1)
-
-        maybe_show_update_notice()
-
-        config_path = resolve_fleet_config(config)
-        try:
-            manifest = load_manifest(str(config_path))
-        except ManifestError as e:
-            typer.secho(f"Error: {e}", fg=typer.colors.RED)
-            raise typer.Exit(1)
-
-        result = validate(manifest, node_name=node)
-        if result.errors:
-            typer.secho("Config validation failed:", fg=typer.colors.RED)
-            for e in result.errors:
-                typer.secho(f"  ✗ {e}", fg=typer.colors.RED)
-            raise typer.Exit(1)
-
-        resolved = render_dict(manifest, node)
-        target = resolved["node"]["target"]
-        role = resolved["node"]["role"]
-        ssh_enabled = resolve_flash_ssh_enabled(
-            enable_ssh=enable_ssh, disable_ssh=disable_ssh
+        run_flash(
+            config=config,
+            node=node,
+            device=device,
+            base_image=base_image,
+            image_sha256=image_sha256,
+            image_url=image_url,
+            download=download,
+            no_download=no_download,
+            yes=yes,
+            dry_run=dry_run,
+            force=force,
+            no_eject=no_eject,
+            skip_overlay_wipe=skip_overlay_wipe,
+            enable_ssh=enable_ssh,
+            disable_ssh=disable_ssh,
+            show_secrets=show_secrets,
         )
 
-        image_path = resolve_base_image(
-            target,
-            base_image,
-            image_sha256,
-            image_url,
-            download,
-            no_download,
-            dry_run,
-        )
 
-        print_header("Flash Plan")
-        typer.echo(f"  Config:       {config_path}")
-        typer.echo(f"  Node:         {node}")
-        typer.echo(f"  Hostname:     {resolved['node']['hostname']}")
-        typer.echo(f"  Role:         {role}")
-        typer.echo(f"  Target:       {target}")
-        typer.echo(f"  Base image:   {image_path}")
-        typer.echo(f"  Device:       {device}")
-        typer.echo("  Boot payload: /easymanet/provision.json")
-        typer.echo(
-            f"  SSH:          {flash_ssh_note(role, enable_ssh=enable_ssh, disable_ssh=disable_ssh)}"
-        )
-        typer.echo()
-
-        try:
-            disk = lookup_device(device)
-            if disk:
-                typer.echo("  Disk details:")
-                typer.echo(f"    Model:      {disk.model}")
-                typer.echo(f"    Size:       {disk.size_human}")
-                typer.echo(f"    Removable:  {'yes' if disk.removable else 'no'}")
-                mounted_str = ", ".join(disk.mounted) if disk.mounted else "(none)"
-                typer.echo(f"    Mounted:    {mounted_str}")
-                for w in disk.blocking_warnings:
-                    typer.secho(f"    {w}", fg=typer.colors.RED)
-                typer.echo()
-            assert_flash_allowed(device, force=force)
-        except ValueError as e:
-            typer.secho(f"  Flash safety: {e}", fg=typer.colors.RED)
-            if not dry_run:
-                raise typer.Exit(1)
-            typer.echo()
-
-        print_header("Resolved provision.json")
-        print(
-            render_provision_for_display(
-                manifest,
-                node,
-                ssh_enabled=ssh_enabled,
-                show_secrets=show_secrets,
-            )
-        )
-        if not show_secrets:
-            typer.secho(
-                "  Secrets redacted. Use --show-secrets to print the full payload.",
-                fg=typer.colors.BLUE,
-            )
-        print()
-
-        typer.echo(inject_dry_run_info(manifest, node))
-        print()
-
-        if dry_run:
-            typer.secho("Dry run complete. No changes were made.", fg=typer.colors.GREEN)
-            return
-
-        try:
-            check_privileges(device)
-        except PrivilegeError as e:
-            typer.secho(str(e), fg=typer.colors.RED)
-            raise typer.Exit(1)
-
-        try:
-            flash_image(
-                device=device,
-                image_path=image_path,
-                force=force,
-                skip_overlay_wipe=skip_overlay_wipe,
-            )
-        except FlashError as e:
-            typer.secho(f"Flash error: {e}", fg=typer.colors.RED)
-            raise typer.Exit(1)
-
-        typer.echo()
-        print_header("Writing boot-partition payload")
-        try:
-            results = inject(
-                device=device,
-                manifest=manifest,
-                node_name=node,
-                ssh_enabled=ssh_enabled,
-            )
-            for path, ok in results:
-                status = "✓" if ok else "✗"
-                color = typer.colors.GREEN if ok else typer.colors.RED
-                typer.secho(f"  {status} {path}", fg=color)
-        except InjectError as e:
-            typer.secho(f"Boot payload error: {e}", fg=typer.colors.RED)
-            typer.secho(
-                "Image was written but boot-partition provisioning failed. "
-                "Re-run the full flash command (same --base-image or cached image) after fixing the issue.",
-                fg=typer.colors.YELLOW,
-            )
-            raise typer.Exit(1)
-
-        if not finish_flash(device, eject=not no_eject):
-            raise typer.Exit(1)
+def run_flash(
+    *,
+    config: str,
+    node: str,
+    device: str,
+    base_image: Optional[str] = None,
+    image_sha256: Optional[str] = None,
+    image_url: Optional[str] = None,
+    download: bool = False,
+    no_download: bool = False,
+    yes: bool = False,
+    dry_run: bool = False,
+    force: bool = False,
+    no_eject: bool = False,
+    skip_overlay_wipe: bool = False,
+    enable_ssh: bool = False,
+    disable_ssh: bool = False,
+    show_secrets: bool = False,
+) -> None:
+    """Run the shared flash workflow used by CLI and desktop surfaces."""
+    check_platform()
+    if enable_ssh and disable_ssh:
         typer.secho(
-            f"\nDone. Insert the drive into the Raspberry Pi for {node} and boot.",
-            fg=typer.colors.GREEN,
+            "Cannot use --enable-ssh and --disable-ssh together.",
+            fg=typer.colors.RED,
         )
+        raise typer.Exit(1)
+    if download and no_download:
+        typer.secho(
+            "Cannot use --download and --no-download together.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(1)
+    if not yes and not dry_run:
+        typer.secho(
+            "--yes is required to flash. Use --dry-run to preview first.",
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(1)
+
+    maybe_show_update_notice()
+
+    config_path = resolve_fleet_config(config)
+    try:
+        manifest = load_manifest(str(config_path))
+    except ManifestError as e:
+        typer.secho(f"Error: {e}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    result = validate(manifest, node_name=node)
+    if result.errors:
+        typer.secho("Config validation failed:", fg=typer.colors.RED)
+        for e in result.errors:
+            typer.secho(f"  ✗ {e}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    resolved = render_dict(manifest, node)
+    target = resolved["node"]["target"]
+    role = resolved["node"]["role"]
+    ssh_enabled = resolve_flash_ssh_enabled(
+        enable_ssh=enable_ssh, disable_ssh=disable_ssh
+    )
+
+    image_path = resolve_base_image(
+        target,
+        base_image,
+        image_sha256,
+        image_url,
+        download,
+        no_download,
+        dry_run,
+    )
+
+    print_header("Flash Plan")
+    typer.echo(f"  Config:       {config_path}")
+    typer.echo(f"  Node:         {node}")
+    typer.echo(f"  Hostname:     {resolved['node']['hostname']}")
+    typer.echo(f"  Role:         {role}")
+    typer.echo(f"  Target:       {target}")
+    typer.echo(f"  Base image:   {image_path}")
+    typer.echo(f"  Device:       {device}")
+    typer.echo("  Boot payload: /easymanet/provision.json")
+    typer.echo(
+        f"  SSH:          {flash_ssh_note(role, enable_ssh=enable_ssh, disable_ssh=disable_ssh)}"
+    )
+    typer.echo()
+
+    try:
+        disk = lookup_device(device)
+        if disk:
+            typer.echo("  Disk details:")
+            typer.echo(f"    Model:      {disk.model}")
+            typer.echo(f"    Size:       {disk.size_human}")
+            typer.echo(f"    Removable:  {'yes' if disk.removable else 'no'}")
+            mounted_str = ", ".join(disk.mounted) if disk.mounted else "(none)"
+            typer.echo(f"    Mounted:    {mounted_str}")
+            for w in disk.blocking_warnings:
+                typer.secho(f"    {w}", fg=typer.colors.RED)
+            typer.echo()
+        assert_flash_allowed(device, force=force)
+    except ValueError as e:
+        typer.secho(f"  Flash safety: {e}", fg=typer.colors.RED)
+        if not dry_run:
+            raise typer.Exit(1)
+        typer.echo()
+
+    print_header("Resolved provision.json")
+    print(
+        render_provision_for_display(
+            manifest,
+            node,
+            ssh_enabled=ssh_enabled,
+            show_secrets=show_secrets,
+        )
+    )
+    if not show_secrets:
+        typer.secho(
+            "  Secrets redacted. Use --show-secrets to print the full payload.",
+            fg=typer.colors.BLUE,
+        )
+    print()
+
+    typer.echo(inject_dry_run_info(manifest, node))
+    print()
+
+    if dry_run:
+        typer.secho("Dry run complete. No changes were made.", fg=typer.colors.GREEN)
+        return
+
+    try:
+        check_privileges(device)
+    except PrivilegeError as e:
+        typer.secho(str(e), fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    try:
+        flash_image(
+            device=device,
+            image_path=image_path,
+            force=force,
+            skip_overlay_wipe=skip_overlay_wipe,
+        )
+    except FlashError as e:
+        typer.secho(f"Flash error: {e}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    typer.echo()
+    print_header("Writing boot-partition payload")
+    try:
+        results = inject(
+            device=device,
+            manifest=manifest,
+            node_name=node,
+            ssh_enabled=ssh_enabled,
+        )
+        for path, ok in results:
+            status = "✓" if ok else "✗"
+            color = typer.colors.GREEN if ok else typer.colors.RED
+            typer.secho(f"  {status} {path}", fg=color)
+    except InjectError as e:
+        typer.secho(f"Boot payload error: {e}", fg=typer.colors.RED)
+        typer.secho(
+            "Image was written but boot-partition provisioning failed. "
+            "Re-run the full flash command (same --base-image or cached image) after fixing the issue.",
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(1)
+
+    if not finish_flash(device, eject=not no_eject):
+        raise typer.Exit(1)
+    typer.secho(
+        f"\nDone. Insert the drive into the Raspberry Pi for {node} and boot.",
+        fg=typer.colors.GREEN,
+    )

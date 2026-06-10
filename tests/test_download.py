@@ -140,6 +140,21 @@ def test_get_cached_image_requires_checksum(image_cache):
     assert download.get_cached_image("rpi4-mm6108-spi") is None
 
 
+def test_check_latest_version_defaults_to_easymanet_images_repo(image_cache, monkeypatch):
+    repos = []
+
+    def fake_check(repo, target):
+        repos.append((repo, target))
+        return download.ImageRef("1.6.5", "https://example.invalid/image.img.gz", "a" * 64)
+
+    monkeypatch.setattr(download, "_check_github_release", fake_check)
+
+    ref = download.check_latest_version("rpi4-mm6108-spi")
+
+    assert ref is not None
+    assert repos == [(download.DEFAULT_IMAGE_GITHUB_REPO, "rpi4-mm6108-spi")]
+
+
 def test_get_cached_image_rejects_checksum_mismatch(image_cache):
     image = image_cache.cache / "openmanet-test-rpi4-mm6108-spi.img.gz"
     _write_gzip(image)

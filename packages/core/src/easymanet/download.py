@@ -9,7 +9,7 @@ Users configure download URLs in the EasyMANET workspace image manifest:
   "rpi4-mm6108-spi": {
     "url": "https://example.com/openmanet-rpi4-mm6108-spi.img.gz",
     "version": "2025.04",
-    "github": "OpenMANET/firmware"
+    "github": "the-Drunken-coder/easymanet-images"
   }
 }
 
@@ -39,7 +39,7 @@ IMAGES_MANIFEST = images_dir() / "images.json"
 VERSION_FILE = images_dir() / "version.json"
 
 DEFAULT_EASYMANET_GITHUB_REPO = "the-Drunken-coder/easymanet"
-DEFAULT_OPENMANET_GITHUB = "OpenMANET/firmware"
+DEFAULT_IMAGE_GITHUB_REPO = "the-Drunken-coder/easymanet-images"
 IMAGE_RELEASE_MANIFEST_ASSETS = {
     "easymanet-image-release.json",
     "easymanet-images.json",
@@ -131,7 +131,7 @@ def check_latest_version(target: str) -> Optional[ImageRef]:
                 sha256 = None
         return ImageRef(info.get("version", "latest"), info["url"], sha256)
 
-    github_repo = info.get("github") or DEFAULT_OPENMANET_GITHUB
+    github_repo = info.get("github") or DEFAULT_IMAGE_GITHUB_REPO
     return _check_github_release(github_repo, target)
 
 

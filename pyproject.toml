@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "easymanet"
-version = "0.1.0"
+version = "0.2.0"
 description = "Zero-touch OpenMANET provisioning and imaging"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "EasyMANET Contributors"}
 ]
@@ -17,7 +17,6 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
@@ -36,7 +35,7 @@ dev = [
     "pytest>=7",
     "pytest-cov",
     "setuptools>=68",
-    "tomli>=2",
+    "tomli>=2; python_version < '3.11'",
     "wheel",
 ]
 
