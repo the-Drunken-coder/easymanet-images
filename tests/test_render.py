@@ -153,7 +153,7 @@ def test_resolve_provision_returns_typed_payload_used_by_render():
     os.unlink(path)
 
 
-def test_render_preserves_shallow_nested_gateway_merge_behavior():
+def test_render_deep_merges_gateway_wifi_defaults():
     config = """
 version: 1
 mesh:
@@ -190,8 +190,24 @@ nodes:
     assert payload.node.gateway.enabled is True
     assert payload.node.gateway.wifi is not None
     assert payload.node.gateway.wifi.enabled is True
-    assert data["node"]["gateway"]["wifi"] == {"enabled": True}
+    assert data["node"]["gateway"]["wifi"] == {
+        "enabled": True,
+        "ssid": "default-uplink",
+        "password": "default-password",
+    }
     os.unlink(path)
+
+
+def test_render_starter_gate_uses_wifi_uplink_shape():
+    m = load_manifest("examples/three-node-field-mesh.yml")
+    gate = render_dict(m, "gate01", ssh_enabled=True)
+
+    assert gate["node"]["gateway"]["enabled"] is True
+    assert gate["node"]["gateway"]["uplink_interface"] == "wifi"
+    assert gate["node"]["gateway"]["wifi"]["enabled"] is True
+    assert gate["node"]["gateway"]["wifi"]["ssid"]
+    assert gate["node"]["gateway"]["wifi"]["password"]
+    assert gate["management"]["ssh_enabled"] is True
 
 
 def test_render_omits_ssh_enabled_when_unspecified():

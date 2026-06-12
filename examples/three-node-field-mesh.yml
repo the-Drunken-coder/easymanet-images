@@ -19,6 +19,13 @@ defaults:
     ssh_authorized_keys:
       - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKm8abcdefgh"
 
+  gateway:
+    wifi:
+      enabled: false
+      ssid: "replace-with-operator-wifi"
+      password: "replace-with-operator-wifi-password"
+      encryption: psk2
+
 nodes:
   gate01:
     role: gate
@@ -30,8 +37,9 @@ nodes:
 
     gateway:
       enabled: true
-      # eth0 stays on br-lan for wired management; use Wi-Fi or another interface for WAN.
-      uplink_interface: eth0
+      uplink_interface: wifi
+      wifi:
+        enabled: true
 
   point01:
     role: point

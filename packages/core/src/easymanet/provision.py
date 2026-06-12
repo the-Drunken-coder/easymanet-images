@@ -314,10 +314,19 @@ def _resolved_gateway(
     *,
     role: object,
 ) -> dict[str, object]:
+    default_gateway = _mapping_or_empty(defaults.get("gateway", {}))
+    node_gateway = _mapping_or_empty(node.get("gateway", {}))
     resolved = {
-        **_mapping_or_empty(defaults.get("gateway", {})),
-        **_mapping_or_empty(node.get("gateway", {})),
+        **default_gateway,
+        **node_gateway,
     }
+    default_wifi = default_gateway.get("wifi")
+    node_wifi = node_gateway.get("wifi")
+    if isinstance(default_wifi, dict):
+        if "wifi" not in node_gateway:
+            resolved["wifi"] = dict(default_wifi)
+        elif isinstance(node_wifi, dict):
+            resolved["wifi"] = {**default_wifi, **node_wifi}
     if role == "gate":
         resolved.setdefault("enabled", True)
     else:

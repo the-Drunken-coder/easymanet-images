@@ -129,6 +129,7 @@ Default gateway settings for gate nodes.
 |-------|------|-------------|
 | `enabled` | bool | Whether gateway mode is enabled |
 | `uplink_interface` | string | Uplink network interface name. `eth0` is reserved for wired management on `br-lan`; use Wi-Fi or a separate interface for WAN routing. |
+| `wifi` | object | Optional Wi-Fi uplink settings. Defaults can hold SSID/password while a gate node enables them with `gateway.wifi.enabled: true`. |
 
 ### `defaults.role` (string)
 
@@ -172,12 +173,16 @@ nodes:
     role: gate
     gateway:
       enabled: true
-      uplink_interface: eth0
+      uplink_interface: wifi
+      wifi:
+        enabled: true
 ```
 
-With `uplink_interface: eth0`, EasyMANET leaves `eth0` on `br-lan` for wired
-management and does not run WAN DHCP on that management bridge. Use Wi-Fi
-uplink or a separate interface if the gate should route upstream traffic.
+With `uplink_interface: wifi`, EasyMANET joins the configured upstream Wi-Fi as
+`wan`. If SSH is enabled at flash time, the node opens SSH on that WAN zone so
+the desktop Mesh tab can discover it on the operator LAN. With
+`uplink_interface: eth0`, EasyMANET leaves `eth0` on `br-lan` for wired
+management and does not run WAN DHCP on that management bridge.
 
 ---
 
