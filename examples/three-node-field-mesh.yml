@@ -3,8 +3,8 @@ version: 1
 mesh:
   id: field-deployment-alpha
   password: "strong-mesh-password-here"
-  channel: 36
-  bandwidth_mhz: 4
+  channel: 42
+  bandwidth_mhz: 2
   country: US
 
 defaults:
@@ -30,7 +30,7 @@ nodes:
 
     gateway:
       enabled: true
-      # eth0 is shared: wired management stays on br-lan, WAN DHCP also uses br-lan.
+      # eth0 stays on br-lan for wired management; use Wi-Fi or another interface for WAN.
       uplink_interface: eth0
 
   point01:

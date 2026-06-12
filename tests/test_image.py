@@ -12,6 +12,7 @@ from easymanet.image import (
     _clear_stale_overlay,
     _dd_device_path,
     _reread_partition_table,
+    _run_dd_with_progress,
     _unmount_or_raise,
     _write_gz_via_dd,
     _write_raw_via_dd,
@@ -48,7 +49,7 @@ def test_check_image_accepts_openwrt_trailing_metadata(tmp_path):
 
 
 def test_clear_stale_overlay_skips_trailing_metadata_gzip_when_payload_covers_region(
-    monkeypatch, capsys, tmp_path
+    monkeypatch, tmp_path
 ):
     payload = b"x" * 4096
     image = tmp_path / "openmanet.img.gz"
@@ -72,9 +73,10 @@ def test_clear_stale_overlay_skips_trailing_metadata_gzip_when_payload_covers_re
     monkeypatch.setattr("easymanet.image.subprocess.run", fake_run)
     monkeypatch.setattr("easymanet.image._reread_partition_table", lambda _d: None)
 
-    _clear_stale_overlay("/dev/disk4", written)
-    captured = capsys.readouterr()
-    assert "Skipping stale overlay wipe" in captured.out
+    events = []
+    _clear_stale_overlay("/dev/disk4", written, emit=events.append)
+    assert events[-1]["type"] == "overlay_wipe_skipped"
+    assert "Skipping stale overlay wipe" in events[-1]["message"]
 
 
 def subprocess_completed():
@@ -229,7 +231,7 @@ def test_dd_device_path_keeps_device_on_non_macos(monkeypatch):
     assert _dd_device_path("/dev/disk4") == "/dev/disk4"
 
 
-def test_clear_stale_overlay_skips_when_image_covers_region(monkeypatch, capsys, tmp_path):
+def test_clear_stale_overlay_skips_when_image_covers_region(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "easymanet.image.get_partition2_wipe_range",
         lambda _d: (1024, 2048),
@@ -243,9 +245,10 @@ def test_clear_stale_overlay_skips_when_image_covers_region(monkeypatch, capsys,
 
     monkeypatch.setattr("easymanet.image.subprocess.run", fake_run)
 
-    _clear_stale_overlay("/dev/disk4", 4096)
-    captured = capsys.readouterr()
-    assert "Skipping stale overlay wipe" in captured.out
+    events = []
+    _clear_stale_overlay("/dev/disk4", 4096, emit=events.append)
+    assert events[-1]["type"] == "overlay_wipe_skipped"
+    assert "Skipping stale overlay wipe" in events[-1]["message"]
 
 
 def test_clear_stale_overlay_raises_when_no_partition_layout(monkeypatch, tmp_path):
@@ -320,8 +323,8 @@ def test_flash_image_unmounts_again_before_overlay_wipe(monkeypatch, tmp_path):
         "easymanet.image.unmount_disk",
         lambda d: unmount_calls.append(d),
     )
-    monkeypatch.setattr("easymanet.image._write_raw_via_dd", lambda *_a: None)
-    monkeypatch.setattr("easymanet.image._clear_stale_overlay", lambda *_a: None)
+    monkeypatch.setattr("easymanet.image._write_raw_via_dd", lambda *_a, **_k: None)
+    monkeypatch.setattr("easymanet.image._clear_stale_overlay", lambda *_a, **_k: None)
     monkeypatch.setattr("os.sync", lambda: None)
 
     flash_image(str(device), str(image), force=True)
@@ -347,7 +350,7 @@ def test_flash_image_wraps_initial_unmount_failure(monkeypatch, tmp_path):
         flash_image(str(device), str(image), force=True, skip_overlay_wipe=True)
 
 
-def test_finish_flash_warns_when_eject_fails(monkeypatch, capsys):
+def test_finish_flash_warns_when_eject_fails(monkeypatch):
     monkeypatch.setattr("easymanet.image.os.sync", lambda: None)
 
     def fail_eject(_device):
@@ -355,16 +358,17 @@ def test_finish_flash_warns_when_eject_fails(monkeypatch, capsys):
 
     monkeypatch.setattr("easymanet.image.eject_disk", fail_eject)
 
-    result = finish_flash("/dev/disk4")
+    events = []
+    result = finish_flash("/dev/disk4", emit=events.append)
 
-    captured = capsys.readouterr()
     assert result is False
-    assert "Warning: eject failed" in captured.out
-    assert "eject /dev/disk4 manually" in captured.out
-    assert "Safe to remove." not in captured.out
+    messages = [event["message"] for event in events]
+    assert "Warning: eject failed" in messages
+    assert any("eject /dev/disk4 manually" in message for message in messages)
+    assert "Safe to remove." not in messages
 
 
-def test_finish_flash_warns_when_eject_times_out(monkeypatch, capsys):
+def test_finish_flash_warns_when_eject_times_out(monkeypatch):
     monkeypatch.setattr("easymanet.image.os.sync", lambda: None)
 
     def fail_eject(_device):
@@ -372,13 +376,14 @@ def test_finish_flash_warns_when_eject_times_out(monkeypatch, capsys):
 
     monkeypatch.setattr("easymanet.image.eject_disk", fail_eject)
 
-    result = finish_flash("/dev/disk4")
+    events = []
+    result = finish_flash("/dev/disk4", emit=events.append)
 
-    captured = capsys.readouterr()
     assert result is False
-    assert "timed out" in captured.out
-    assert "eject /dev/disk4 manually" in captured.out
-    assert "Safe to remove." not in captured.out
+    messages = [event["message"] for event in events]
+    assert any("timed out" in message for message in messages)
+    assert any("eject /dev/disk4 manually" in message for message in messages)
+    assert "Safe to remove." not in messages
 
 
 @REAL_DD_TEST
@@ -432,13 +437,13 @@ def test_write_gz_via_dd_accepts_gzip_exit_code_2(monkeypatch, tmp_path):
         (["gzip", "-dc", str(image)], {"stdout": subprocess.PIPE}),
         (
             ["dd", f"of={device}", "bs=16M", "status=progress"],
-            {"stdin": gzip_stdout},
+            {"stdin": gzip_stdout, "stderr": subprocess.PIPE, "text": True},
         ),
     ]
     assert gzip_stdout.closed is True
 
 
-def test_write_gz_via_dd_uses_raw_device_on_macos(monkeypatch, tmp_path):
+def test_write_gz_via_dd_uses_raw_padded_device_on_macos(monkeypatch, tmp_path):
     image = tmp_path / "firmware.img.gz"
     with gzip.open(image, "wb") as handle:
         handle.write(b"payload")
@@ -469,7 +474,55 @@ def test_write_gz_via_dd_uses_raw_device_on_macos(monkeypatch, tmp_path):
 
     _write_gz_via_dd(str(image), "/dev/disk4")
 
-    assert ["dd", "of=/dev/rdisk4", "bs=16m", "status=progress"] in popen_calls
+    assert [
+        "dd",
+        "of=/dev/rdisk4",
+        "ibs=16m",
+        "obs=1m",
+        "iflag=fullblock",
+        "conv=osync",
+        "status=progress",
+    ] in popen_calls
+
+
+def test_write_gz_via_dd_reports_dd_failure_before_gzip_sigpipe(monkeypatch, tmp_path):
+    image = tmp_path / "firmware.img.gz"
+    with gzip.open(image, "wb") as handle:
+        handle.write(b"payload")
+
+    import io
+
+    class FakeProc:
+        def __init__(self, returncode, stdout=None, stderr=None):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+        def wait(self):
+            return self.returncode
+
+    gzip_stdout = io.BytesIO(b"payload")
+    procs = [
+        FakeProc(-13, stdout=gzip_stdout),
+        FakeProc(1, stderr=io.StringIO("dd: /dev/rdisk4: Invalid argument\n")),
+    ]
+
+    def fake_popen(cmd, **_kwargs):
+        if cmd[0] == "gzip":
+            return procs[0]
+        return procs[1]
+
+    monkeypatch.setattr("easymanet.image.is_macos", lambda: True)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr("easymanet.image._tool_path", lambda name: name)
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        _write_gz_via_dd(str(image), "/dev/disk4")
+
+    assert exc_info.value.cmd[0] == "dd"
+    assert "iflag=fullblock" in exc_info.value.cmd
+    assert "conv=osync" in exc_info.value.cmd
+    assert "Invalid argument" in exc_info.value.stderr
 
 
 def test_write_raw_via_dd_uses_macos_dd_block_suffix(monkeypatch, tmp_path):
@@ -487,6 +540,30 @@ def test_write_raw_via_dd_uses_macos_dd_block_suffix(monkeypatch, tmp_path):
     _write_raw_via_dd(str(image), "/dev/disk4")
 
     assert ["dd", f"if={image}", "of=/dev/rdisk4", "bs=16m", "status=progress"] in run_calls
+
+
+def test_run_dd_with_progress_emits_parsed_byte_count(monkeypatch):
+    import io
+
+    class FakeProc:
+        stderr = io.StringIO("1048576 bytes transferred\n")
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr("easymanet.image.subprocess.Popen", lambda *_a, **_k: FakeProc())
+    events = []
+
+    _run_dd_with_progress(["dd", "if=image", "of=device"], emit=events.append)
+
+    assert events == [
+        {
+            "type": "dd_progress",
+            "message": "1048576 bytes transferred",
+            "raw": "1048576 bytes transferred",
+            "bytes": 1048576,
+        }
+    ]
 
 
 def test_check_device_safety_requires_force_for_blocking_disk(monkeypatch):

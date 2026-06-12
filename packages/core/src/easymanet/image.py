@@ -5,11 +5,12 @@ and clean unmount/eject.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import zlib
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 from .disks import (
     assert_flash_allowed,
@@ -23,6 +24,20 @@ from .platform import is_linux, is_macos
 
 class FlashError(Exception):
     pass
+
+
+FlashEventCallback = Callable[[dict[str, Any]], None]
+DD_PROGRESS_PATTERN = re.compile(r"(?P<bytes>\d+)\s+bytes")
+
+
+def _emit_event(
+    emit: FlashEventCallback | None,
+    event_type: str,
+    message: str,
+    **data: Any,
+) -> None:
+    if emit:
+        emit({"type": event_type, "message": message, **data})
 
 
 def _tool_path(name: str) -> str:
@@ -128,6 +143,7 @@ def flash_image(
     dry_run: bool = False,
     force: bool = False,
     skip_overlay_wipe: bool = False,
+    emit: FlashEventCallback | None = None,
 ) -> None:
     image, gzip_written_bytes = _check_image(image_path)
     _check_device_safety(device, force=force)
@@ -138,48 +154,62 @@ def flash_image(
     disk = lookup_device(device)
 
     if disk:
-        mounted_str = ", ".join(disk.mounted) if disk.mounted else "none"
-        print(f"Device: {disk.device}")
-        print(f"Model: {disk.model}")
-        print(f"Size: {disk.size_human}")
-        print(f"Mounted: {mounted_str}")
-        print(f"Removable: {'yes' if disk.removable else 'no'}")
-        print()
+        _emit_event(
+            emit,
+            "disk_details",
+            f"Device: {disk.device}",
+            device=disk.device,
+            model=disk.model,
+            size_human=disk.size_human,
+            mounted=disk.mounted,
+            removable=disk.removable,
+        )
 
     try:
         _unmount_or_raise(device)
-        print(f"Writing {image.name} to {device}...")
+        _emit_event(
+            emit,
+            "write_started",
+            f"Writing {image.name} to {device}...",
+            image=image.name,
+            device=device,
+        )
 
         if image.suffix == ".gz":
-            _write_gz_via_dd(str(image), device)
+            _write_gz_via_dd(str(image), device, emit=emit)
         else:
-            _write_raw_via_dd(str(image), device)
+            _write_raw_via_dd(str(image), device, emit=emit)
 
-        print("Syncing...")
+        _emit_event(emit, "sync_started", "Syncing...")
         os.sync()
-        print("Done writing.")
+        _emit_event(emit, "write_completed", "Done writing.")
 
         if not skip_overlay_wipe:
             written_bytes = gzip_written_bytes if gzip_written_bytes is not None else image.stat().st_size
             # macOS (and sometimes Linux) auto-mounts partitions after dd; unmount before raw wipe.
             _unmount_or_raise(device)
-            _clear_stale_overlay(device, written_bytes)
+            _clear_stale_overlay(device, written_bytes, emit=emit)
 
     except subprocess.CalledProcessError as e:
-        raise FlashError(f"Flash failed: {e}") from e
+        raise FlashError(f"Flash failed: {_command_error_message(e)}") from e
     except FlashError:
         raise
     except (OSError, subprocess.SubprocessError) as e:
         raise FlashError(f"Flash failed: {e}") from e
 
 
-def _write_gz_via_dd(image_path: str, device: str) -> None:
+def _write_gz_via_dd(
+    image_path: str,
+    device: str,
+    *,
+    emit: FlashEventCallback | None = None,
+) -> None:
     gzip_cmd = [_tool_path("gzip"), "-dc", image_path]
-    output_device = _dd_device_path(device)
+    output_device = _stream_dd_device_path(device)
     dd_cmd = [
         _tool_path("dd"),
         f"of={output_device}",
-        _write_block_size_arg(),
+        *_stream_dd_block_args(),
         "status=progress",
     ]
     gzip_proc = subprocess.Popen(
@@ -187,21 +217,32 @@ def _write_gz_via_dd(image_path: str, device: str) -> None:
         stdout=subprocess.PIPE,
     )
     assert gzip_proc.stdout is not None
-    dd_proc = subprocess.Popen(
-        dd_cmd,
-        stdin=gzip_proc.stdout,
-    )
+    dd_kwargs: dict[str, Any] = {"stdin": gzip_proc.stdout, "stderr": subprocess.PIPE, "text": True}
+    dd_proc = subprocess.Popen(dd_cmd, **dd_kwargs)
     gzip_proc.stdout.close()
 
+    dd_stderr = _drain_dd_progress(dd_proc, emit)
     dd_return = dd_proc.wait()
     gzip_return = gzip_proc.wait()
+
+    if dd_return != 0:
+        raise subprocess.CalledProcessError(dd_return, dd_cmd, stderr=dd_stderr)
 
     # OpenWrt/OpenMANET sysupgrade metadata after the gzip stream can yield exit 2
     # ("trailing garbage ignored"); payload integrity is validated by _check_gzip_payload.
     if gzip_return not in (0, 2):
         raise subprocess.CalledProcessError(gzip_return, gzip_cmd)
-    if dd_return != 0:
-        raise subprocess.CalledProcessError(dd_return, dd_cmd)
+
+
+def _command_error_message(error: subprocess.CalledProcessError) -> str:
+    stderr = error.stderr
+    stdout = error.stdout
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode(errors="replace")
+    detail = str(stderr or stdout or "").strip()
+    return f"{error}: {detail}" if detail else str(error)
 
 
 _OVERLAY_WIPE_SECTOR_BYTES = 512
@@ -214,6 +255,16 @@ def _dd_device_path(device: str) -> str:
     return device
 
 
+def _stream_dd_device_path(device: str) -> str:
+    return _dd_device_path(device) if is_macos() else device
+
+
+def _stream_dd_block_args() -> list[str]:
+    if is_macos():
+        return ["ibs=16m", "obs=1m", "iflag=fullblock", "conv=osync"]
+    return [_write_block_size_arg()]
+
+
 def _write_block_size_arg() -> str:
     return "bs=16m" if is_macos() else "bs=16M"
 
@@ -222,14 +273,21 @@ def _ceil_div(numerator: int, denominator: int) -> int:
     return (numerator + denominator - 1) // denominator
 
 
-def _run_zero_dd(device: str, block_bytes: int, seek_blocks: int, count_blocks: int) -> None:
+def _run_zero_dd(
+    device: str,
+    block_bytes: int,
+    seek_blocks: int,
+    count_blocks: int,
+    *,
+    emit: FlashEventCallback | None = None,
+) -> None:
     if count_blocks <= 0:
         return
 
     # macOS may auto-mount partitions between wipe phases (especially after long writes).
     _unmount_or_raise(device)
     output_device = _dd_device_path(device)
-    subprocess.run(
+    _run_dd_with_progress(
         [
             _tool_path("dd"),
             "if=/dev/zero",
@@ -239,11 +297,16 @@ def _run_zero_dd(device: str, block_bytes: int, seek_blocks: int, count_blocks: 
             f"count={count_blocks}",
             "status=progress",
         ],
-        check=True,
+        emit=emit,
     )
 
 
-def _clear_stale_overlay(device: str, written_bytes: int) -> None:
+def _clear_stale_overlay(
+    device: str,
+    written_bytes: int,
+    *,
+    emit: FlashEventCallback | None = None,
+) -> None:
     _reread_partition_table(device)
     wipe_range = get_partition2_wipe_range(device)
     if not wipe_range:
@@ -258,7 +321,11 @@ def _clear_stale_overlay(device: str, written_bytes: int) -> None:
     start_bytes = max(tail_start, written_bytes)
     wipe_bytes = wipe_bytes - (start_bytes - tail_start)
     if wipe_bytes <= 0:
-        print("Skipping stale overlay wipe; image covers the wipe region.")
+        _emit_event(
+            emit,
+            "overlay_wipe_skipped",
+            "Skipping stale overlay wipe; image covers the wipe region.",
+        )
         return
 
     sector_bytes = _OVERLAY_WIPE_SECTOR_BYTES
@@ -268,8 +335,12 @@ def _clear_stale_overlay(device: str, written_bytes: int) -> None:
     span_bytes = wipe_bytes + (aligned_start - start_bytes)
     count_sectors = max(1, _ceil_div(span_bytes, sector_bytes))
     total_mib = count_sectors * sector_bytes / (1024 * 1024)
-    print(
-        f"Clearing stale OpenWrt overlay area ({total_mib:.1f} MiB at offset {start_bytes} bytes)..."
+    _emit_event(
+        emit,
+        "overlay_wipe_started",
+        f"Clearing stale OpenWrt overlay area ({total_mib:.1f} MiB at offset {start_bytes} bytes)...",
+        total_mib=total_mib,
+        start_bytes=start_bytes,
     )
 
     total_bytes = count_sectors * sector_bytes
@@ -277,24 +348,29 @@ def _clear_stale_overlay(device: str, written_bytes: int) -> None:
     if cursor % bulk_bytes:
         prefix_bytes = min(total_bytes, bulk_bytes - (cursor % bulk_bytes))
         prefix_sectors = _ceil_div(prefix_bytes, sector_bytes)
-        _run_zero_dd(device, sector_bytes, cursor // sector_bytes, prefix_sectors)
+        _run_zero_dd(device, sector_bytes, cursor // sector_bytes, prefix_sectors, emit=emit)
         prefix_written = prefix_sectors * sector_bytes
         cursor += prefix_written
         total_bytes -= prefix_written
 
     bulk_blocks = total_bytes // bulk_bytes
-    _run_zero_dd(device, bulk_bytes, cursor // bulk_bytes, bulk_blocks)
+    _run_zero_dd(device, bulk_bytes, cursor // bulk_bytes, bulk_blocks, emit=emit)
     bulk_written = bulk_blocks * bulk_bytes
     cursor += bulk_written
     total_bytes -= bulk_written
 
     tail_sectors = total_bytes // sector_bytes
-    _run_zero_dd(device, sector_bytes, cursor // sector_bytes, tail_sectors)
+    _run_zero_dd(device, sector_bytes, cursor // sector_bytes, tail_sectors, emit=emit)
 
 
-def _write_raw_via_dd(image_path: str, device: str) -> None:
+def _write_raw_via_dd(
+    image_path: str,
+    device: str,
+    *,
+    emit: FlashEventCallback | None = None,
+) -> None:
     output_device = _dd_device_path(device)
-    subprocess.run(
+    _run_dd_with_progress(
         [
             _tool_path("dd"),
             f"if={image_path}",
@@ -302,22 +378,81 @@ def _write_raw_via_dd(image_path: str, device: str) -> None:
             _write_block_size_arg(),
             "status=progress",
         ],
-        check=True,
+        emit=emit,
     )
 
 
-def finish_flash(device: str, eject: bool = True) -> bool:
+def _run_dd_with_progress(
+    cmd: list[str],
+    *,
+    emit: FlashEventCallback | None = None,
+) -> None:
+    if emit is None:
+        subprocess.run(cmd, check=True)
+        return
+
+    proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
+    stderr = _drain_dd_progress(proc, emit)
+    return_code = proc.wait()
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, cmd, stderr=stderr)
+
+
+def _drain_dd_progress(
+    proc: subprocess.Popen,
+    emit: FlashEventCallback | None,
+) -> str:
+    stderr_stream = getattr(proc, "stderr", None)
+    if stderr_stream is None:
+        return ""
+    captured = []
+    buffer = []
+    while True:
+        char = stderr_stream.read(1)
+        if not char:
+            break
+        captured.append(char)
+        if char in "\r\n":
+            _emit_dd_progress("".join(buffer).strip(), emit)
+            buffer = []
+        else:
+            buffer.append(char)
+    if buffer:
+        _emit_dd_progress("".join(buffer).strip(), emit)
+    return "".join(captured)
+
+
+def _emit_dd_progress(text: str, emit: FlashEventCallback | None) -> None:
+    if not text:
+        return
+    match = DD_PROGRESS_PATTERN.search(text)
+    data: dict[str, Any] = {"raw": text}
+    if match:
+        data["bytes"] = int(match.group("bytes"))
+    if emit:
+        emit({"type": "dd_progress", "message": text, **data})
+
+
+def finish_flash(
+    device: str,
+    eject: bool = True,
+    *,
+    emit: FlashEventCallback | None = None,
+) -> bool:
     os.sync()
     if eject:
-        print(f"Ejecting {device}...")
+        _emit_event(emit, "eject_started", f"Ejecting {device}...", device=device)
         try:
             eject_disk(device)
         except (RuntimeError, OSError, subprocess.SubprocessError) as e:
-            print(f"Warning: {e}")
-            print(
+            _emit_event(emit, "warning", f"Warning: {e}", level="warning")
+            _emit_event(
+                emit,
+                "eject_failed",
                 f"Image written and payload staged, but eject failed. "
-                f"Run sync and eject {device} manually before removing it."
+                f"Run sync and eject {device} manually before removing it.",
+                level="warning",
             )
             return False
-    print("Safe to remove.")
+    _emit_event(emit, "safe_to_remove", "Safe to remove.", device=device)
     return True

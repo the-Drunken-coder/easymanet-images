@@ -152,10 +152,10 @@ debugging path.
 - The current fix is intentionally defensive:
   - first-boot provisioning tries to keep `eth0` on `br-lan`
   - a late boot repair service runs after startup and enforces the same state
-  - the repair removes stale direct-`eth0` `wan` / `wan6`, commits network
-    config, brings `lan` up, and calls `brctl addif br-lan eth0`
-  - gate nodes with `gateway.uplink_interface: eth0` run WAN DHCP on `br-lan`,
-    so wired management and Ethernet upstream share one L2 segment
+  - the repair removes stale `eth0` or `br-lan` `wan` / `wan6`, commits
+    network config, brings `lan` up, and calls `brctl addif br-lan eth0`
+  - gate nodes with `gateway.uplink_interface: eth0` keep that interface for
+    wired management; use Wi-Fi or a separate interface for WAN routing
 
 - This was necessary because OpenMANET startup can leave `eth0` as `wan`, which
   makes direct Ethernet management unreachable even though Dropbear is running.
@@ -710,9 +710,9 @@ sudo route -n delete default 10.41.0.1
 sudo route -n add default 192.168.1.1
 ```
 
-This is expected with the shared-`br-lan` `eth0` gateway mode: the Mac sees the
-EasyMANET management DHCP service and the upstream Ethernet network on the same
-wire.
+Avoid sharing the EasyMANET management LAN with an upstream Ethernet network.
+Use Wi-Fi uplink or a separate wired interface when the gate should route WAN
+traffic.
 
 ### What To Do Next
 

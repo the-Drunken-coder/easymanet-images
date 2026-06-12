@@ -87,8 +87,8 @@ def test_firstboot_temp_boot_mount_is_writable_for_payload_removal():
 
 def test_firstboot_requires_node_ip():
     text = PROVISION_SCRIPT.read_text()
-    required_block = text.split('if [ -z "$MESH_ID" ]', 1)[1].split("fi", 1)[0]
-    assert '[ -z "$NODE_IP" ]' in required_block
+    required_block = text.split('missing_fields=""', 1)[1].split('if [ -n "$missing_fields" ]', 1)[0]
+    assert '[ -n "$NODE_IP" ] || missing_fields="$missing_fields node.ip"' in required_block
 
 
 def test_firstboot_does_not_auto_reboot_after_provisioning():

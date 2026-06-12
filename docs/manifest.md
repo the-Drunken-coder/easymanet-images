@@ -39,7 +39,8 @@ mesh:
 ### `mesh.channel` (required, integer)
 
 WiFi channel for the mesh radio. Valid values depend on the country
-regulatory domain.
+regulatory domain. For the tested `rpi4-mm6108-spi` MM6108 target in the US,
+use channel `42` with `mesh.bandwidth_mhz: 2`.
 
 ```yaml
 mesh:
@@ -49,6 +50,7 @@ mesh:
 ### `mesh.bandwidth_mhz` (required, integer)
 
 Channel bandwidth in MHz. Must be one of: 1, 2, 4, 8.
+For the tested `rpi4-mm6108-spi` MM6108 target in the US, use `2`.
 
 ```yaml
 mesh:
@@ -126,7 +128,7 @@ Default gateway settings for gate nodes.
 | Field | Type | Description |
 |-------|------|-------------|
 | `enabled` | bool | Whether gateway mode is enabled |
-| `uplink_interface` | string | Uplink network interface name. `eth0` is shared with wired management by running WAN DHCP on `br-lan`. |
+| `uplink_interface` | string | Uplink network interface name. `eth0` is reserved for wired management on `br-lan`; use Wi-Fi or a separate interface for WAN routing. |
 
 ### `defaults.role` (string)
 
@@ -174,8 +176,8 @@ nodes:
 ```
 
 With `uplink_interface: eth0`, EasyMANET leaves `eth0` on `br-lan` for wired
-management and runs the WAN DHCP client on `br-lan`. The upstream Ethernet
-network and the management LAN therefore share one L2 segment.
+management and does not run WAN DHCP on that management bridge. Use Wi-Fi
+uplink or a separate interface if the gate should route upstream traffic.
 
 ---
 
@@ -218,9 +220,8 @@ Priority (highest to lowest):
 ## Security
 
 - Empty `root_password_hash` does not set a root password on the node.
-- `gateway.uplink_interface: eth0` shares WAN DHCP and wired management on
-  `br-lan`; use a different uplink or Wi-Fi when the upstream network must not
-  see the management LAN DHCP service.
+- `gateway.uplink_interface: eth0` is reserved for wired management on
+  `br-lan`; use a separate uplink or Wi-Fi uplink for WAN routing.
 - `gateway.wifi.enabled` with SSH enabled opens SSH on the WAN firewall zone.
 - Mesh credentials may be written to `/etc/openmanetd/config.yml` in plaintext
   when that file exists on the image.

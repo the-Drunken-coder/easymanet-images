@@ -33,7 +33,5 @@ def check_privileges(device: str) -> None:
 
     raise PrivilegeError(
         "Write access to the target block device is required.\n"
-        "Run with sudo, for example:\n"
-        "  sudo easymanet flash --config fleet.yml --node manet01 "
-        "--device /dev/sdX --yes"
+        "Re-run the same flash command with sudo."
     )

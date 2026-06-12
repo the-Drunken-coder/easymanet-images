@@ -28,15 +28,13 @@ import urllib.error
 from urllib.parse import urlparse
 import zlib
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import Any, Callable, NamedTuple, Optional
 
 from . import __version__
 from .format import human_size
 from .workspace import images_dir
 
-CACHE_DIR = images_dir()
-IMAGES_MANIFEST = images_dir() / "images.json"
-VERSION_FILE = images_dir() / "version.json"
+DownloadEventCallback = Callable[[dict[str, Any]], None]
 
 DEFAULT_EASYMANET_GITHUB_REPO = "the-Drunken-coder/easymanet"
 DEFAULT_IMAGE_GITHUB_REPO = "the-Drunken-coder/easymanet-images"
@@ -71,6 +69,28 @@ def _debug_note(message: str) -> None:
     print(f"easymanet: {message}", file=sys.stderr)
 
 
+def cache_dir() -> Path:
+    return images_dir()
+
+
+def images_manifest_path() -> Path:
+    return images_dir() / "images.json"
+
+
+def version_file_path() -> Path:
+    return images_dir() / "version.json"
+
+
+def _emit_event(
+    emit: DownloadEventCallback | None,
+    event_type: str,
+    message: str,
+    **data: Any,
+) -> None:
+    if emit:
+        emit({"type": event_type, "message": message, **data})
+
+
 DEFAULT_IMAGES = {
     "rpi4-mm6108-spi": {
         "description": "OpenMANET for Raspberry Pi 4 + MM6108 SPI",
@@ -81,22 +101,25 @@ DEFAULT_IMAGES = {
 
 
 def _ensure_cache_dir() -> Path:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    return CACHE_DIR
+    path = cache_dir()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _load_images_manifest() -> dict:
-    if IMAGES_MANIFEST.exists():
+    path = images_manifest_path()
+    if path.exists():
         try:
-            return json.loads(IMAGES_MANIFEST.read_text())
+            return json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
             pass
     return {}
 
 
 def _save_images_manifest(data: dict) -> None:
-    IMAGES_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-    IMAGES_MANIFEST.write_text(json.dumps(data, indent=2))
+    path = images_manifest_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2))
 
 
 def get_image_config(target: str) -> Optional[dict]:
@@ -164,7 +187,7 @@ def _pick_release_asset(release: dict, target: str) -> Optional[ImageRef]:
             and "sysupgrade" in name
             and name.endswith(".img.gz")
         ):
-            print(f"  Using release asset: {name}")
+            _debug_note(f"Using release asset: {name}")
             sha256 = _sha256_for_release_asset(asset, assets)
             return ImageRef(version, asset["browser_download_url"], sha256)
 
@@ -181,7 +204,7 @@ def _check_github_release(repo: str, target: str) -> Optional[ImageRef]:
     result = _pick_release_asset(release, target)
     if not result:
         version = release.get("tag_name", "unknown")
-        print(
+        _debug_note(
             f"No matching sysupgrade image for target '{target}' in {repo} release {version}. "
             f"Expected asset like openmanet-{version}-{target}-squashfs-sysupgrade.img.gz"
         )
@@ -199,7 +222,12 @@ def _pick_manifest_release_asset(release: dict, target: str) -> Optional[ImageRe
         manifest = _fetch_release_manifest(manifest_url)
         if not manifest:
             continue
-        ref = _image_ref_from_release_manifest(manifest, assets, target)
+        ref = _image_ref_from_release_manifest(
+            manifest,
+            assets,
+            target,
+            release_version=str(release.get("tag_name", "") or ""),
+        )
         if ref:
             return ref
     return None
@@ -219,6 +247,7 @@ def _image_ref_from_release_manifest(
     manifest: dict,
     assets: list[dict],
     target: str,
+    release_version: str = "",
 ) -> Optional[ImageRef]:
     if manifest.get("target") != target:
         return None
@@ -234,7 +263,12 @@ def _image_ref_from_release_manifest(
 
     for asset in assets:
         if asset.get("name") == filename and asset.get("browser_download_url"):
-            version = manifest.get("openmanet_version") or manifest.get("channel") or "latest"
+            version = (
+                release_version
+                or manifest.get("openmanet_version")
+                or manifest.get("channel")
+                or "latest"
+            )
             return ImageRef(version, asset["browser_download_url"], sha256)
     return None
 
@@ -395,20 +429,28 @@ def download_image(
     url: str,
     sha256: str,
     force: bool = False,
+    emit: DownloadEventCallback | None = None,
 ) -> Path:
     _validate_download_url(url)
     expected_sha256 = normalize_sha256(sha256)
-    _ensure_cache_dir()
+    cache = _ensure_cache_dir()
     filename = _url_to_filename(url)
-    dest = CACHE_DIR / filename
+    dest = cache / filename
 
     if dest.exists() and not force:
         if _valid_cached_image(dest) and _cached_image_matches_sha256(dest, expected_sha256):
+            _save_version(target, version, sha256=expected_sha256, url=url)
             return dest
         dest.unlink()
 
-    print(f"Downloading {target} image ({version})...")
-    print(f"  URL: {url}")
+    _emit_event(
+        emit,
+        "download_started",
+        f"Downloading {target} image ({version})...",
+        target=target,
+        version=version,
+    )
+    _emit_event(emit, "download_url", f"  URL: {url}", url=url)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -435,13 +477,20 @@ def download_image(
                     downloaded += len(chunk)
                     if total:
                         pct = int(downloaded / total * 100)
-                        print(
-                            f"\r  Progress: {pct}% "
-                            f"({human_size(downloaded)}/{human_size(total)})",
-                            end="",
-                            flush=True,
+                        message = (
+                            f"  Progress: {pct}% "
+                            f"({human_size(downloaded)}/{human_size(total)})"
                         )
-            print()
+                        if emit:
+                            emit(
+                                {
+                                    "type": "download_progress",
+                                    "message": message,
+                                    "downloaded_bytes": downloaded,
+                                    "total_bytes": total,
+                                    "percent": pct,
+                                }
+                            )
         if not _valid_image_payload(tmp_path, dest.name):
             raise OSError(f"Downloaded image failed integrity check: {dest.name}")
         verify_image_sha256(tmp_path, expected_sha256)
@@ -455,8 +504,8 @@ def download_image(
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
 
-    _save_version(target, version)
-    print(f"  Saved: {dest}")
+    _save_version(target, version, sha256=expected_sha256, url=url)
+    _emit_event(emit, "download_completed", f"  Saved: {dest}", path=str(dest))
     return dest
 
 
@@ -465,7 +514,7 @@ def get_cached_image(
     sha256: Optional[str] = None,
     url: Optional[str] = None,
 ) -> Optional[Path]:
-    _ensure_cache_dir()
+    cache = _ensure_cache_dir()
     info = get_image_config(target)
     expected_sha256 = sha256 or (info or {}).get("sha256")
     if not expected_sha256:
@@ -476,12 +525,12 @@ def get_cached_image(
     if source_url:
         filename = _url_to_filename(source_url)
         if filename:
-            cached = CACHE_DIR / filename
+            cached = cache / filename
             if cached.exists() and _valid_cached_image(cached) and _cached_image_matches_sha256(cached, expected_sha256):
                 return cached
             if cached.exists():
                 cached.unlink()
-    cached_images = sorted(CACHE_DIR.glob(f"*{target}*"), key=_cache_mtime, reverse=True)
+    cached_images = sorted(cache.glob(f"*{target}*"), key=_cache_mtime, reverse=True)
     for path in cached_images:
         if _valid_cached_image(path) and _cached_image_matches_sha256(path, expected_sha256):
             return path
@@ -531,16 +580,28 @@ def _valid_image_payload(path: Path, filename: str) -> bool:
     return decompressor.eof and total > 0
 
 
-def _save_version(target: str, version: str) -> None:
-    VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+def _save_version(
+    target: str,
+    version: str,
+    *,
+    sha256: Optional[str] = None,
+    url: str = "",
+) -> None:
+    path = version_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     data = {}
-    if VERSION_FILE.exists():
+    if path.exists():
         try:
-            data = json.loads(VERSION_FILE.read_text())
+            data = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
             pass
-    data[target] = version
-    VERSION_FILE.write_text(json.dumps(data, indent=2))
+    entry: dict[str, str] = {"version": version}
+    if sha256:
+        entry["sha256"] = normalize_sha256(sha256)
+    if url:
+        entry["url"] = url
+    data[target] = entry
+    path.write_text(json.dumps(data, indent=2))
 
 
 def easymanet_update_repo() -> str:

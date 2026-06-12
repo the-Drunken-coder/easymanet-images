@@ -9,10 +9,13 @@ import re
 from typing import List, Optional
 
 from .manifest import Manifest
+from .provision import GatewayConfig, LocalApConfig, resolve_node_model
 
 VALID_ROLES = {"gate", "point"}
 VALID_TARGETS = {"rpi4-mm6108-spi"}
 VALID_BANDWIDTHS = {1, 2, 4, 8}
+MM6108_TARGET = "rpi4-mm6108-spi"
+MM6108_US_VALID_MESH = {(0, 2), (42, 2)}
 VALID_WIFI_ENCRYPTION = {"psk2", "sae", "none", "psk", "psk-mixed"}
 COUNTRY_PATTERN = re.compile(r"^[A-Z]{2}$")
 
@@ -54,6 +57,16 @@ def validate_ip(ip_str: str) -> Optional[str]:
 def validate_ssh_key(key: str) -> Optional[str]:
     if not SSH_KEY_PATTERN.match(key.strip()):
         return f"Invalid SSH public key format: {key[:50]}..."
+    return None
+
+
+def _as_int(value: object) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
     return None
 
 
@@ -128,6 +141,8 @@ def validate(manifest: Manifest, node_name: Optional[str] = None) -> ValidationR
         )
         management = {}
 
+    _validate_target_mesh_settings(result, mesh, defaults, nodes, node_name)
+
     for name in nodes:
         if not isinstance(name, str):
             result.add_error(f"Node name must be a string, got {type(name).__name__}")
@@ -182,38 +197,22 @@ def validate(manifest: Manifest, node_name: Optional[str] = None) -> ValidationR
             result.add_error(
                 f"Node '{name}': local_ap must be a mapping, got {type(node_local_ap).__name__}"
             )
-            node_local_ap = {}
-        resolved_local_ap = {**default_local_ap, **node_local_ap}
-        if resolved_local_ap.get("enabled", False):
-            ap_password = resolved_local_ap.get("password", "")
-            if not ap_password:
-                result.add_error(
-                    f"Node '{name}': local_ap.enabled requires local_ap.password"
-                )
-            elif not isinstance(ap_password, str):
-                result.add_error(
-                    f"Node '{name}': local_ap.password must be a string"
-                )
-            elif len(ap_password) < 8:
-                result.add_error(
-                    f"Node '{name}': local_ap.password must be at least 8 characters"
-                )
 
         node_gateway = node.get("gateway", {})
         if not isinstance(node_gateway, dict):
             result.add_error(
                 f"Node '{name}': gateway must be a mapping, got {type(node_gateway).__name__}"
             )
-            node_gateway = {}
-        if isinstance(default_gateway, dict) and isinstance(node_gateway, dict):
-            resolved_gateway = {**default_gateway, **node_gateway}
-            if resolved_gateway.get("enabled") and role == "gate":
-                uplink = resolved_gateway.get("uplink_interface")
+        if isinstance(manifest.defaults, dict):
+            resolved = resolve_node_model(manifest, name)
+            _validate_local_ap(result, name, resolved.local_ap)
+            if resolved.gateway.enabled and role == "gate":
+                uplink = resolved.gateway.uplink_interface
                 if not uplink:
                     result.add_warning(
                         f"Node '{name}': gate role without gateway.uplink_interface set"
                     )
-            _validate_gateway_wifi(result, name, resolved_gateway)
+            _validate_gateway_wifi(result, name, resolved.gateway)
 
     ssh_keys = management.get("ssh_authorized_keys", [])
     if not ssh_keys:
@@ -246,35 +245,88 @@ def validate(manifest: Manifest, node_name: Optional[str] = None) -> ValidationR
             )
         elif not isinstance(manifest.defaults, dict):
             pass
-        else:
-            resolved = resolve_node(manifest, node_name)
-            if isinstance(resolved.get("local_ap"), dict) and resolved["local_ap"].get("enabled"):
-                pw = resolved["local_ap"].get("password", "")
-                if not pw:
-                    result.add_error(
-                        f"Node '{node_name}': resolved local_ap.enabled requires local_ap.password"
-                    )
-                elif not isinstance(pw, str):
-                    result.add_error(
-                        f"Node '{node_name}': resolved local_ap.password must be a string"
-                    )
-                elif len(pw) < 8:
-                    result.add_error(
-                        f"Node '{node_name}': resolved local_ap.password must be at least 8 characters"
-                    )
-            _validate_gateway_wifi(result, node_name, resolved.get("gateway", {}))
 
     return result
 
 
-def _validate_gateway_wifi(result: ValidationResult, node_label: str, gateway: dict) -> None:
-    if not isinstance(gateway, dict):
+def _validate_target_mesh_settings(
+    result: ValidationResult,
+    mesh: object,
+    defaults: dict,
+    nodes: dict,
+    node_name: Optional[str],
+) -> None:
+    if not isinstance(mesh, dict):
         return
-    wifi = gateway.get("wifi", {})
-    if not isinstance(wifi, dict) or not wifi.get("enabled"):
+    channel = _as_int(mesh.get("channel"))
+    bandwidth = _as_int(mesh.get("bandwidth_mhz"))
+    country = str(mesh.get("country", ""))
+    if mesh.get("channel") is not None and channel is None:
+        result.add_error(f"mesh.channel must be numeric, got '{mesh.get('channel')}'")
         return
-    ssid = wifi.get("ssid", "")
-    password = wifi.get("password", "")
+    if channel is None or bandwidth is None or bandwidth not in VALID_BANDWIDTHS:
+        return
+    if not COUNTRY_PATTERN.match(country):
+        return
+
+    target_names = _targets_for_mesh_validation(defaults, nodes, node_name)
+    if MM6108_TARGET not in target_names:
+        return
+    if country == "US" and (channel, bandwidth) not in MM6108_US_VALID_MESH:
+        result.add_error(
+            "mesh.channel/bandwidth_mhz for rpi4-mm6108-spi in US must be "
+            "channel 42 with bandwidth_mhz 2; "
+            f"got channel {channel} with bandwidth_mhz {bandwidth}"
+        )
+
+
+def _targets_for_mesh_validation(
+    defaults: dict,
+    nodes: dict,
+    node_name: Optional[str],
+) -> set[str]:
+    names = [node_name] if node_name in nodes else list(nodes)
+    targets: set[str] = set()
+    for name in names:
+        node = nodes.get(name)
+        if not isinstance(node, dict):
+            continue
+        targets.add(str(node.get("target", defaults.get("target", ""))))
+    return targets
+
+
+def _validate_local_ap(
+    result: ValidationResult,
+    node_label: str,
+    local_ap: LocalApConfig,
+) -> None:
+    if not local_ap.enabled:
+        return
+    password = local_ap.password
+    if not password:
+        result.add_error(
+            f"Node '{node_label}': local_ap.enabled requires local_ap.password"
+        )
+    elif not isinstance(password, str):
+        result.add_error(
+            f"Node '{node_label}': local_ap.password must be a string"
+        )
+    elif len(password) < 8:
+        result.add_error(
+            f"Node '{node_label}': local_ap.password must be at least 8 characters"
+        )
+
+
+def _validate_gateway_wifi(
+    result: ValidationResult,
+    node_label: str,
+    gateway: GatewayConfig,
+) -> None:
+    wifi = gateway.wifi
+    if wifi is None or not wifi.enabled:
+        return
+    ssid = wifi.ssid
+    password = wifi.password
     if not ssid:
         result.add_error(
             f"Node '{node_label}': gateway.wifi.enabled requires gateway.wifi.ssid"
@@ -283,7 +335,7 @@ def _validate_gateway_wifi(result: ValidationResult, node_label: str, gateway: d
         result.add_error(
             f"Node '{node_label}': gateway.wifi.enabled requires gateway.wifi.password"
         )
-    encryption = wifi.get("encryption")
+    encryption = wifi.encryption
     if encryption is not None and encryption not in VALID_WIFI_ENCRYPTION:
         result.add_error(
             f"Node '{node_label}': gateway.wifi.encryption must be one of "
@@ -292,47 +344,4 @@ def _validate_gateway_wifi(result: ValidationResult, node_label: str, gateway: d
 
 
 def resolve_node(manifest: Manifest, node_name: str) -> dict:
-    defaults = manifest.defaults
-    node = manifest.get_node(node_name)
-    mesh = manifest.mesh
-
-    resolved: dict = {
-        "name": node_name,
-        "hostname": node.get("hostname", node_name),
-        "role": node.get("role", defaults.get("role", "point")),
-        "target": node.get("target", defaults.get("target", "rpi4-mm6108-spi")),
-        "ip": node.get("ip", ""),
-    }
-
-    default_local_ap = defaults.get("local_ap", {})
-    node_local_ap = node.get("local_ap", {})
-    if not isinstance(default_local_ap, dict):
-        default_local_ap = {}
-    if not isinstance(node_local_ap, dict):
-        node_local_ap = {}
-    resolved_local_ap = {**default_local_ap, **node_local_ap}
-    if "enabled" not in resolved_local_ap:
-        resolved_local_ap["enabled"] = False
-    if resolved_local_ap.get("ssid") is None:
-        resolved_local_ap["ssid"] = f"{node_name}-local"
-    resolved["local_ap"] = resolved_local_ap
-
-    default_gateway = defaults.get("gateway", {})
-    node_gateway = node.get("gateway", {})
-    if not isinstance(default_gateway, dict):
-        default_gateway = {}
-    if not isinstance(node_gateway, dict):
-        node_gateway = {}
-    resolved_gateway = {**default_gateway, **node_gateway}
-    if resolved["role"] == "gate":
-        resolved_gateway.setdefault("enabled", True)
-    else:
-        resolved_gateway.setdefault("enabled", False)
-    resolved["gateway"] = resolved_gateway
-
-    if resolved_local_ap.get("enabled") and not resolved_local_ap.get("password"):
-        default_ap_pw = default_local_ap.get("password", "")
-        if default_ap_pw:
-            resolved_local_ap["password"] = default_ap_pw
-
-    return resolved
+    return resolve_node_model(manifest, node_name).to_dict()

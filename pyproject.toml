@@ -3,11 +3,11 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "easymanet"
+name = "easymanet-images"
 version = "0.2.0"
-description = "Zero-touch OpenMANET provisioning and imaging"
+description = "Public firmware image factory for EasyMANET/OpenMANET releases."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 authors = [
     {name = "EasyMANET Contributors"}
@@ -20,14 +20,14 @@ classifiers = [
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Topic :: System :: Installation/Setup",
     "Topic :: System :: Systems Administration",
 ]
 dependencies = [
     "typer>=0.9",
     "pyyaml>=6",
-    "rich>=13",
 ]
 
 [project.optional-dependencies]
@@ -41,28 +41,18 @@ dev = [
 
 [project.scripts]
 easymanet = "easymanet_cli.app:main"
-easymanet-desktop = "easymanet_desktop.server:main"
-easymanet-publish = "easymanet_publish.cli:app"
 
 [tool.setuptools.packages.find]
 where = [
     "packages/core/src",
     "packages/image/src",
     "apps/cli/src",
-    "apps/desktop/src",
-    "tools/publish/src",
 ]
 include = [
     "easymanet*",
     "easymanet_cli*",
     "easymanet_image*",
-    "easymanet_desktop*",
-    "easymanet_publish*",
 ]
-
-[tool.setuptools.package-data]
-"easymanet_desktop" = ["static/*"]
-"easymanet_publish" = ["templates/*/.github/workflows/*.yml"]
 
 [tool.setuptools.data-files]
 "share/easymanet/images/openmanet/provisioning" = [
@@ -100,7 +90,5 @@ pythonpath = [
     "packages/core/src",
     "packages/image/src",
     "apps/cli/src",
-    "apps/desktop/src",
-    "tools/publish/src",
     ".",
 ]

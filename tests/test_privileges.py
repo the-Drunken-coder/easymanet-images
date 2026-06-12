@@ -39,3 +39,16 @@ def test_check_privileges_requires_access_otherwise(monkeypatch):
 
     with pytest.raises(PrivilegeError, match="Write access"):
         check_privileges("/dev/disk4")
+
+
+def test_privilege_error_does_not_include_placeholder_flash_target(monkeypatch):
+    monkeypatch.setattr("easymanet.privileges.is_running_as_root", lambda: False)
+    monkeypatch.setattr("easymanet.privileges.is_linux", lambda: False)
+    monkeypatch.setattr("easymanet.privileges.can_write_block_device", lambda _d: False)
+
+    with pytest.raises(PrivilegeError) as exc_info:
+        check_privileges("/dev/disk4")
+
+    message = str(exc_info.value)
+    assert "manet01" not in message
+    assert "/dev/sdX" not in message

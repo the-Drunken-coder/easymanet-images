@@ -1,8 +1,11 @@
 """Tests for CLI helpers."""
 
+from types import SimpleNamespace
+
 import pytest
 import typer
 
+import easymanet.flash as core_flash
 from easymanet_cli import flash as cli_flash
 from easymanet_cli.flash import (
     CUSTOM_IMAGE_VERSION,
@@ -20,8 +23,8 @@ version: 1
 mesh:
   id: field
   password: test-password
-  channel: 36
-  bandwidth_mhz: 4
+  channel: 42
+  bandwidth_mhz: 2
   country: US
 
 defaults:
@@ -164,7 +167,7 @@ def test_flash_base_image_rejects_malformed_sha256(tmp_path, capsys):
     image = tmp_path / "openmanet.img.gz"
     image.write_bytes(b"firmware")
 
-    with pytest.raises(typer.Exit) as exc:
+    with pytest.raises(core_flash.FlashWorkflowError) as exc:
         resolve_base_image(
             "rpi4-mm6108-spi",
             str(image),
@@ -175,12 +178,11 @@ def test_flash_base_image_rejects_malformed_sha256(tmp_path, capsys):
             False,
         )
 
-    assert exc.value.exit_code == 1
-    assert "Invalid --image-sha256" in capsys.readouterr().out
+    assert "Invalid --image-sha256" in str(exc.value)
 
 
 def test_flash_image_url_rejects_malformed_sha256(capsys):
-    with pytest.raises(typer.Exit) as exc:
+    with pytest.raises(core_flash.FlashWorkflowError) as exc:
         resolve_base_image(
             "rpi4-mm6108-spi",
             None,
@@ -191,8 +193,7 @@ def test_flash_image_url_rejects_malformed_sha256(capsys):
             False,
         )
 
-    assert exc.value.exit_code == 1
-    assert "Invalid --image-sha256" in capsys.readouterr().out
+    assert "Invalid --image-sha256" in str(exc.value)
 
 
 def test_flash_image_url_uses_custom_version_label(monkeypatch):
@@ -209,9 +210,9 @@ def test_flash_image_url_uses_custom_version_label(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(cli_flash, "set_image_config", fake_set_image_config)
+    monkeypatch.setattr(core_flash, "set_image_config", fake_set_image_config)
 
-    with pytest.raises(typer.Exit):
+    with pytest.raises(core_flash.FlashWorkflowError):
         resolve_base_image(
             "rpi4-mm6108-spi",
             None,
@@ -226,9 +227,9 @@ def test_flash_image_url_uses_custom_version_label(monkeypatch):
 
 
 def test_flash_download_missing_url_hint_mentions_sha256(monkeypatch, capsys):
-    monkeypatch.setattr(cli_flash, "check_latest_version", lambda _target: None)
+    monkeypatch.setattr(core_flash, "check_latest_version", lambda _target: None)
 
-    with pytest.raises(typer.Exit):
+    with pytest.raises(core_flash.FlashWorkflowError) as exc:
         resolve_base_image(
             "rpi4-mm6108-spi",
             None,
@@ -239,7 +240,7 @@ def test_flash_download_missing_url_hint_mentions_sha256(monkeypatch, capsys):
             False,
         )
 
-    assert "--image-sha256 <SHA256>" in capsys.readouterr().out
+    assert "--image-sha256 <SHA256>" in str(exc.value)
 
 
 def test_image_empty_config_hint_mentions_sha256(monkeypatch):
@@ -309,38 +310,47 @@ def test_flash_exits_when_finish_flash_reports_eject_failure(tmp_path, monkeypat
     image.write_bytes(b"firmware")
     finish_calls = []
 
-    monkeypatch.setattr(cli_flash, "check_platform", lambda: None)
     monkeypatch.setattr(cli_flash, "maybe_show_update_notice", lambda: None)
-    monkeypatch.setattr(cli_flash, "load_manifest", lambda _config: object())
+    monkeypatch.setattr(core_flash, "check_platform", lambda: None)
+    monkeypatch.setattr(core_flash, "load_manifest", lambda _config: object())
     monkeypatch.setattr(
-        cli_flash,
+        core_flash,
         "validate",
-        lambda *_args, **_kwargs: type("Result", (), {"errors": []})(),
+        lambda *_args, **_kwargs: type("Result", (), {"errors": [], "warnings": []})(),
     )
     monkeypatch.setattr(
-        cli_flash,
-        "render_dict",
-        lambda *_args, **_kwargs: {
-            "node": {
-                "target": "rpi4-mm6108-spi",
-                "role": "point",
-                "hostname": "point01",
-            }
-        },
+        core_flash,
+        "resolve_provision",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            node=SimpleNamespace(
+                target="rpi4-mm6108-spi",
+                role="point",
+                hostname="point01",
+            ),
+            to_dict=lambda: {
+                "version": 1,
+                "mesh": {},
+                "node": {
+                    "target": "rpi4-mm6108-spi",
+                    "role": "point",
+                    "hostname": "point01",
+                },
+                "management": {},
+            },
+        ),
     )
-    monkeypatch.setattr(cli_flash, "lookup_device", lambda _device: None)
-    monkeypatch.setattr(cli_flash, "assert_flash_allowed", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli_flash, "render_provision_for_display", lambda *_args, **_kwargs: "{}")
-    monkeypatch.setattr(cli_flash, "inject_dry_run_info", lambda *_args, **_kwargs: "")
-    monkeypatch.setattr(cli_flash, "check_privileges", lambda _device: None)
-    monkeypatch.setattr(cli_flash, "flash_image", lambda **_kwargs: None)
-    monkeypatch.setattr(cli_flash, "inject", lambda **_kwargs: [("/easymanet/provision.json", True)])
+    monkeypatch.setattr(core_flash, "lookup_device", lambda _device: None)
+    monkeypatch.setattr(core_flash, "assert_flash_allowed", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(core_flash, "inject_dry_run_info", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(core_flash, "check_privileges", lambda _device: None)
+    monkeypatch.setattr(core_flash, "flash_image", lambda **_kwargs: None)
+    monkeypatch.setattr(core_flash, "inject", lambda **_kwargs: [("/easymanet/provision.json", True)])
 
-    def fake_finish_flash(device, eject=True):
+    def fake_finish_flash(device, eject=True, **_kwargs):
         finish_calls.append((device, eject))
         return False
 
-    monkeypatch.setattr(cli_flash, "finish_flash", fake_finish_flash)
+    monkeypatch.setattr(core_flash, "finish_flash", fake_finish_flash)
 
     result = CliRunner().invoke(
         app,

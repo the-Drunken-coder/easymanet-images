@@ -208,18 +208,64 @@ if ! command -v jsonfilter >/dev/null 2>&1; then
     exit 1
 fi
 
+PROVISION_VERSION="$(json_val version)"
 MESH_ID="$(json_val mesh id)"
 MESH_PASSWORD="$(json_val mesh password)"
 HOSTNAME="$(json_val node hostname)"
 NODE_ROLE="$(json_val node role)"
 NODE_IP="$(json_val node ip)"
+NODE_TARGET="$(json_val node target)"
 MESH_CHANNEL="$(json_val mesh channel)"
 MESH_BW="$(json_val mesh bandwidth_mhz)"
 MESH_COUNTRY="$(json_val mesh country)"
 
-if [ -z "$MESH_ID" ] || [ -z "$MESH_PASSWORD" ] || [ -z "$HOSTNAME" ] || [ -z "$NODE_IP" ]; then
-    echo "FATAL: missing required mesh/node fields in provision.json" | tee -a "$LOG_FILE"
+missing_fields=""
+[ -n "$PROVISION_VERSION" ] || missing_fields="$missing_fields version"
+[ -n "$MESH_ID" ] || missing_fields="$missing_fields mesh.id"
+[ -n "$MESH_PASSWORD" ] || missing_fields="$missing_fields mesh.password"
+[ -n "$MESH_CHANNEL" ] || missing_fields="$missing_fields mesh.channel"
+[ -n "$MESH_BW" ] || missing_fields="$missing_fields mesh.bandwidth_mhz"
+[ -n "$MESH_COUNTRY" ] || missing_fields="$missing_fields mesh.country"
+[ -n "$HOSTNAME" ] || missing_fields="$missing_fields node.hostname"
+[ -n "$NODE_ROLE" ] || missing_fields="$missing_fields node.role"
+[ -n "$NODE_IP" ] || missing_fields="$missing_fields node.ip"
+[ -n "$NODE_TARGET" ] || NODE_TARGET="rpi4-mm6108-spi"
+if [ -n "$missing_fields" ]; then
+    echo "FATAL: missing required provision.json fields:$missing_fields" | tee -a "$LOG_FILE"
     exit 1
+fi
+if [ "$PROVISION_VERSION" != "1" ]; then
+    echo "FATAL: unsupported provision.json version: $PROVISION_VERSION" | tee -a "$LOG_FILE"
+    exit 1
+fi
+case "$NODE_ROLE" in
+    gate|point) ;;
+    *)
+        echo "FATAL: unsupported node.role in provision.json: $NODE_ROLE" | tee -a "$LOG_FILE"
+        exit 1
+        ;;
+esac
+case "$MESH_BW" in
+    1|2|4|8) ;;
+    *)
+        echo "FATAL: unsupported mesh.bandwidth_mhz in provision.json: $MESH_BW" | tee -a "$LOG_FILE"
+        exit 1
+        ;;
+esac
+case "$MESH_CHANNEL" in
+    *[!0-9]*)
+        echo "FATAL: mesh.channel must be numeric in provision.json: $MESH_CHANNEL" | tee -a "$LOG_FILE"
+        exit 1
+        ;;
+esac
+if [ "$NODE_TARGET" = "rpi4-mm6108-spi" ] && [ "$MESH_COUNTRY" = "US" ]; then
+    case "${MESH_CHANNEL}:${MESH_BW}" in
+        0:2|42:2) ;;
+        *)
+            echo "FATAL: rpi4-mm6108-spi in US requires mesh.channel 42 and mesh.bandwidth_mhz 2; got channel $MESH_CHANNEL bandwidth $MESH_BW" | tee -a "$LOG_FILE"
+            exit 1
+            ;;
+    esac
 fi
 
 BATMAN_GW_MODE="client"
@@ -429,17 +475,19 @@ fi
 if [ "$NODE_ROLE" = "gate" ] && [ "$WIFI_UPLINK_ENABLED" -ne 1 ]; then
     UPLINK="$(json_val node gateway uplink_interface 2>/dev/null || true)"
     [ -n "$UPLINK" ] || UPLINK="eth0"
-    WAN_DEVICE="$UPLINK"
     if [ "$UPLINK" = "eth0" ]; then
-        WAN_DEVICE="br-lan"
+        uci -q delete network.wan 2>/dev/null || true
+        uci -q delete network.wan6 2>/dev/null || true
+        uci_commit network
+    else
+        uci_set network.wan=interface
+        uci_set network.wan.proto="dhcp"
+        uci_set network.wan.device="$UPLINK"
+        uci_set network.wan.ifname="$UPLINK"
+        uci_set network.wan.peerdns="0"
+        uci_set network.wan.dns="$EM_UPLINK_DNS"
+        uci_commit network
     fi
-    uci_set network.wan=interface
-    uci_set network.wan.proto="dhcp"
-    uci_set network.wan.device="$WAN_DEVICE"
-    uci_set network.wan.ifname="$WAN_DEVICE"
-    uci_set network.wan.peerdns="0"
-    uci_set network.wan.dns="$EM_UPLINK_DNS"
-    uci_commit network
 fi
 
 if [ "$WIFI_UPLINK_ENABLED" -eq 1 ]; then
