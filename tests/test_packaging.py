@@ -73,7 +73,8 @@ def test_installed_wheel_preserves_overlay_executable_modes(tmp_path):
         ],
         env=env,
     )
-    wheels = sorted(wheel_dir.glob("easymanet-*.whl"))
+    release_smoke = _load_release_smoke_module()
+    wheels = release_smoke.built_wheels(wheel_dir, ROOT)
     assert len(wheels) == 1
 
     _run_packaging_command(
@@ -127,3 +128,14 @@ def test_release_smoke_run_passes_timeout_to_subprocess(monkeypatch):
     release_smoke.run(["echo", "ok"], timeout=7)
 
     assert captured["timeout"] == 7
+
+
+def test_release_smoke_wheel_glob_uses_normalized_project_name(tmp_path):
+    release_smoke = _load_release_smoke_module()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "easymanet-images"\nversion = "0.2.0"\n'
+    )
+
+    assert release_smoke.wheel_glob_pattern(repo) == "easymanet_images-*.whl"
