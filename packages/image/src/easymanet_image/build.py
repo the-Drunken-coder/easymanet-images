@@ -361,7 +361,7 @@ git checkout {version_q}
 git submodule update --init --recursive
 
 mkdir -p files
-rm -rf files/etc/easymanet files/etc/uci-defaults/99-easymanet files/usr/lib/easymanet
+rm -rf files/etc/easymanet files/etc/uci-defaults/99-easymanet files/usr/lib/easymanet files/www/easymanet-api
 mkdir -p files/etc files/etc/uci-defaults files/usr/lib
 cp -R /overlay/* files/
 

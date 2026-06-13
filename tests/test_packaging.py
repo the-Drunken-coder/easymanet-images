@@ -18,9 +18,13 @@ EXECUTABLE_OVERLAY_FILES = [
     "etc/uci-defaults/97-easymanet-management-lan",
     "etc/uci-defaults/98-easymanet-boot-report",
     "etc/uci-defaults/99-easymanet",
+    "usr/lib/easymanet/api.sh",
     "usr/lib/easymanet/boot-report.sh",
     "usr/lib/easymanet/network.sh",
     "usr/lib/easymanet/provision.sh",
+    "www/easymanet-api/v1/identity",
+    "www/easymanet-api/v1/neighbors",
+    "www/easymanet-api/v1/topology",
 ]
 PACKAGING_COMMAND_TIMEOUT = 180
 

@@ -40,6 +40,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 : "${EM_MESH11SD_MBSS_START_SCAN_MS:=2048}"
 : "${EM_MESH11SD_MBCA_MIN_BEACON_GAP_MS:=25}"
 : "${EM_MESH11SD_MBCA_TBTT_ADJ_INTERVAL_SEC:=60}"
+: "${EM_EASYMANET_API_PORT:=10411}"
 
 LOG_FILE="$(_prefix_path /var/log/easymanet.log)"
 PROVISIONED_FLAG="$(_prefix_path /etc/easymanet/provisioned)"
@@ -147,6 +148,10 @@ uci_commit() {
     uci commit "$1" >> "$LOG_FILE" 2>&1
 }
 
+uci_add_list() {
+    uci add_list "$@" >> "$LOG_FILE" 2>&1
+}
+
 configure_mesh_radio_device() {
     radio="$1"
     uci_set wireless."$radio".channel="$MESH_CHANNEL"
@@ -155,6 +160,30 @@ configure_mesh_radio_device() {
     uci_set wireless."$radio".country="$MESH_COUNTRY"
     uci_set wireless."$radio".bcf="$EM_MESH_BCF"
     uci_set wireless."$radio".disabled="0"
+}
+
+configure_easymanet_api() {
+    api_home="$(_prefix_path /www/easymanet-api)"
+    if [ ! -x "$api_home/v1/identity" ] || [ ! -x "$api_home/v1/topology" ]; then
+        echo "WARNING: EasyMANET API endpoint wrappers are missing; skipping API setup" >> "$LOG_FILE"
+        return 0
+    fi
+
+    echo "Configuring EasyMANET topology API on port $EM_EASYMANET_API_PORT..." >> "$LOG_FILE"
+    uci -q delete uhttpd.easymanet_api 2>/dev/null || true
+    uci_set uhttpd.easymanet_api=uhttpd
+    uci_set uhttpd.easymanet_api.home="$api_home"
+    uci_set uhttpd.easymanet_api.cgi_prefix="/v1"
+    uci_set uhttpd.easymanet_api.script_timeout="10"
+    uci_set uhttpd.easymanet_api.network_timeout="10"
+    uci_set uhttpd.easymanet_api.http_keepalive="0"
+    uci_set uhttpd.easymanet_api.tcp_keepalive="1"
+    if [ "$NODE_ROLE" = "gate" ]; then
+        uci_add_list uhttpd.easymanet_api.listen_http="0.0.0.0:$EM_EASYMANET_API_PORT"
+    else
+        uci_add_list uhttpd.easymanet_api.listen_http="$NODE_IP:$EM_EASYMANET_API_PORT"
+    fi
+    uci_commit uhttpd
 }
 
 find_boot_json() {
@@ -443,7 +472,18 @@ uci_set firewall.mesh_zone.network="meship"
 uci_set firewall.mesh_zone.input="ACCEPT"
 uci_set firewall.mesh_zone.output="ACCEPT"
 uci_set firewall.mesh_zone.forward="ACCEPT"
+uci -q delete firewall.allow_easymanet_api_wan 2>/dev/null || true
+if [ "$NODE_ROLE" = "gate" ]; then
+    uci_set firewall.allow_easymanet_api_wan=rule
+    uci_set firewall.allow_easymanet_api_wan.name="Allow-EasyMANET-API-WAN"
+    uci_set firewall.allow_easymanet_api_wan.src="wan"
+    uci_set firewall.allow_easymanet_api_wan.proto="tcp"
+    uci_set firewall.allow_easymanet_api_wan.dest_port="$EM_EASYMANET_API_PORT"
+    uci_set firewall.allow_easymanet_api_wan.target="ACCEPT"
+fi
 uci_commit firewall
+
+configure_easymanet_api
 
 uci_set mesh11sd.setup=mesh11sd
 uci_set mesh11sd.setup.enabled="1"
@@ -523,6 +563,15 @@ if [ -x "$dropbear_init" ]; then
         "$dropbear_init" stop 2>/dev/null || true
         "$dropbear_init" disable 2>/dev/null || true
     fi
+fi
+
+uhttpd_init="$(_prefix_path /etc/init.d/uhttpd)"
+if [ -x "$uhttpd_init" ]; then
+    echo "Enabling EasyMANET topology API (uhttpd)..." >> "$LOG_FILE"
+    "$uhttpd_init" enable 2>/dev/null || true
+    "$uhttpd_init" restart 2>/dev/null || "$uhttpd_init" start 2>/dev/null || true
+else
+    echo "WARNING: uhttpd init script not found; EasyMANET topology API will not start" >> "$LOG_FILE"
 fi
 
 openmanetd_config="$(_prefix_path /etc/openmanetd/config.yml)"

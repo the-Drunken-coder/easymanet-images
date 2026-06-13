@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "easymanet-images"
-version = "0.2.0"
+version = "0.2.1"
 description = "Public firmware image factory for EasyMANET/OpenMANET releases."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -77,10 +77,16 @@ include = [
     "images/openmanet/provisioning/openwrt-overlay/etc/uci-defaults/99-easymanet",
 ]
 "share/easymanet/images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet" = [
+    "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/api.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/boot-report.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/network.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/provision-lib.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/provision.sh",
+]
+"share/easymanet/images/openmanet/provisioning/openwrt-overlay/www/easymanet-api/v1" = [
+    "images/openmanet/provisioning/openwrt-overlay/www/easymanet-api/v1/identity",
+    "images/openmanet/provisioning/openwrt-overlay/www/easymanet-api/v1/neighbors",
+    "images/openmanet/provisioning/openwrt-overlay/www/easymanet-api/v1/topology",
 ]
 
 [tool.pytest.ini_options]

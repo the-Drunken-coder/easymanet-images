@@ -88,6 +88,34 @@ def test_render_valid_provision_json():
     os.unlink(path)
 
 
+def test_render_includes_non_secret_fleet_inventory():
+    path = _write_config(VALID_CONFIG)
+    m = load_manifest(path)
+    data = render_dict(m, "node02")
+
+    assert data["fleet"]["nodes"] == [
+        {
+            "name": "node01",
+            "hostname": "node01",
+            "role": "gate",
+            "target": "rpi4-mm6108-spi",
+            "ip": "10.41.1.1",
+        },
+        {
+            "name": "node02",
+            "hostname": "node02",
+            "role": "point",
+            "target": "rpi4-mm6108-spi",
+            "ip": "10.41.2.1",
+        },
+    ]
+    serialized = json.dumps(data["fleet"])
+    assert "test-password" not in serialized
+    assert "ap-password" not in serialized
+    assert "ssh-ed25519" not in serialized
+    os.unlink(path)
+
+
 def test_render_gate_node():
     path = _write_config(VALID_CONFIG)
     m = load_manifest(path)

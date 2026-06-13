@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -169,6 +170,18 @@ def _point_provision_json() -> dict:
     return data
 
 
+def _copy_api_overlay(prefix: Path) -> None:
+    for relative in (
+        "www/easymanet-api/v1/identity",
+        "www/easymanet-api/v1/neighbors",
+        "www/easymanet-api/v1/topology",
+    ):
+        source = OVERLAY / relative
+        target = prefix / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
 def _write_dropbear_stub(prefix: Path) -> None:
     init_dir = prefix / "etc" / "init.d"
     init_dir.mkdir(parents=True, exist_ok=True)
@@ -183,6 +196,24 @@ case "$1" in
   start) echo started >> "$state_file" ;;
   disable) echo disabled >> "$state_file" ;;
   stop) echo stopped >> "$state_file" ;;
+esac
+"""
+    )
+    stub.chmod(0o755)
+
+
+def _write_uhttpd_stub(prefix: Path) -> None:
+    init_dir = prefix / "etc" / "init.d"
+    init_dir.mkdir(parents=True, exist_ok=True)
+    state_file = prefix / "var" / "uhttpd-state"
+    stub = init_dir / "uhttpd"
+    stub.write_text(
+        f"""#!/bin/sh
+state_file="{state_file}"
+case "$1" in
+  enable) echo enabled >> "$state_file" ;;
+  restart) echo restarted >> "$state_file" ;;
+  start) echo started >> "$state_file" ;;
 esac
 """
     )
@@ -292,6 +323,102 @@ def test_provision_point_node_disables_ssh(tmp_path):
 
     dropbear_state = (prefix / "var" / "dropbear-state").read_text()
     assert "disabled" in dropbear_state
+
+
+def test_provision_gate_exposes_topology_api_on_lan_and_mesh(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    _copy_api_overlay(prefix)
+    _write_uhttpd_stub(prefix)
+
+    result = _run_provision(prefix, _gate_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    env = _harness_env(uci_state)
+    assert _uci_get(uci_state, "uhttpd.easymanet_api.home", env).endswith(
+        "/www/easymanet-api"
+    )
+    assert _uci_get(uci_state, "uhttpd.easymanet_api.cgi_prefix", env) == "/v1"
+    assert (
+        _uci_get(uci_state, "uhttpd.easymanet_api.listen_http", env)
+        == "0.0.0.0:10411"
+    )
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.src", env) == "wan"
+    assert (
+        _uci_get(uci_state, "firewall.allow_easymanet_api_wan.dest_port", env)
+        == "10411"
+    )
+    assert "restarted" in (prefix / "var" / "uhttpd-state").read_text()
+
+
+def test_provision_point_exposes_topology_api_only_on_mesh_ip(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    _copy_api_overlay(prefix)
+    _write_uhttpd_stub(prefix)
+
+    result = _run_provision(prefix, _point_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    env = _harness_env(uci_state)
+    assert (
+        _uci_get(uci_state, "uhttpd.easymanet_api.listen_http", env)
+        == "10.41.2.1:10411"
+    )
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.src", env) == ""
+
+
+def test_topology_api_parses_batctl_neighbors_fixture():
+    fixture = """
+[B.A.T.M.A.N. adv 2023.1, MainIF/MAC: wlan0/c0:bf:be:ef:00:01 (bat0/aa:bb:cc:dd:ee:ff BATMAN_V)]
+IF             Neighbor              last-seen
+wlan0          bc:2a:33:96:af:68     0.430s (7.1)
+"""
+
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh")],
+        input=fixture,
+        env={
+            **os.environ,
+            "EASYMANET_API_TEST_MODE": "parse-neighbors",
+            "EASYMANET_LIB_DIR": str(OVERLAY / "usr" / "lib" / "easymanet"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "wlan0\tbc:2a:33:96:af:68\t0.430s\t7.1"
+
+
+def test_topology_api_parses_batctl_originators_fixture():
+    fixture = """
+[B.A.T.M.A.N. adv 2023.1, MainIF/MAC: wlan0/c0:bf:be:ef:00:01 (bat0/aa:bb:cc:dd:ee:ff BATMAN_V)]
+  Originator        last-seen (#/255) Nexthop           [outgoingIF]
+  bc:2a:33:96:af:68   0.430s   (255) bc:2a:33:96:af:68 [wlan0]
+"""
+
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh")],
+        input=fixture,
+        env={
+            **os.environ,
+            "EASYMANET_API_TEST_MODE": "parse-originators",
+            "EASYMANET_LIB_DIR": str(OVERLAY / "usr" / "lib" / "easymanet"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        result.stdout.strip()
+        == "bc:2a:33:96:af:68\t0.430s\tbc:2a:33:96:af:68\twlan0"
+    )
 
 
 def test_provision_writes_valid_root_password_hash(tmp_path):

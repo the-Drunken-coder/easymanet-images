@@ -145,3 +145,18 @@ def test_boot_report_hook_is_packaged_and_enabled():
     assert 'cp /etc/config/mesh11sd "$latest/config-mesh11sd"' not in report_text
     assert "/etc/init.d/easymanet-boot-report enable" in defaults.read_text()
     assert "write_easymanet_boot_report provisioned" in PROVISION_SCRIPT.read_text()
+
+
+def test_topology_api_overlay_is_packaged():
+    api = OVERLAY / "usr" / "lib" / "easymanet" / "api.sh"
+    identity = OVERLAY / "www" / "easymanet-api" / "v1" / "identity"
+    neighbors = OVERLAY / "www" / "easymanet-api" / "v1" / "neighbors"
+    topology = OVERLAY / "www" / "easymanet-api" / "v1" / "topology"
+    provision_text = PROVISION_SCRIPT.read_text()
+
+    for path in (api, identity, neighbors, topology):
+        assert path.exists()
+        assert path.stat().st_mode & 0o111
+    assert "configure_easymanet_api" in provision_text
+    assert "uhttpd.easymanet_api" in provision_text
+    assert "allow_easymanet_api_wan" in provision_text
