@@ -472,8 +472,13 @@ uci_set firewall.mesh_zone.network="meship"
 uci_set firewall.mesh_zone.input="ACCEPT"
 uci_set firewall.mesh_zone.output="ACCEPT"
 uci_set firewall.mesh_zone.forward="ACCEPT"
+uci -q delete firewall.mesh_wan_forwarding 2>/dev/null || true
 uci -q delete firewall.allow_easymanet_api_wan 2>/dev/null || true
 if [ "$NODE_ROLE" = "gate" ]; then
+    uci_set firewall.mesh_wan_forwarding=forwarding
+    uci_set firewall.mesh_wan_forwarding.src="mesh"
+    uci_set firewall.mesh_wan_forwarding.dest="wan"
+
     uci_set firewall.allow_easymanet_api_wan=rule
     uci_set firewall.allow_easymanet_api_wan.name="Allow-EasyMANET-API-WAN"
     uci_set firewall.allow_easymanet_api_wan.src="wan"

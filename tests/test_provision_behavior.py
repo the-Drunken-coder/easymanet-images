@@ -317,6 +317,8 @@ def test_provision_gate_node_smoke(tmp_path):
     assert _uci_get(uci_state, "network.wan.device", env) == ""
     assert _uci_get(uci_state, "network.wan.ifname", env) == ""
     assert _uci_get(uci_state, "mesh11sd.mesh_params.mesh_gate_announcements", env) == "1"
+    assert _uci_get(uci_state, "firewall.mesh_wan_forwarding.src", env) == "mesh"
+    assert _uci_get(uci_state, "firewall.mesh_wan_forwarding.dest", env) == "wan"
 
     dropbear_state = (prefix / "var" / "dropbear-state").read_text()
     assert "enabled" in dropbear_state
@@ -339,6 +341,7 @@ def test_provision_point_node_disables_ssh(tmp_path):
     assert _uci_get(uci_state, "network.bat0.gw_mode", env) == "client"
     assert _uci_get(uci_state, "network.meship.ipaddr", env) == "10.41.2.1"
     assert _uci_get(uci_state, "mesh11sd.mesh_params.mesh_gate_announcements", env) == "0"
+    assert _uci_get(uci_state, "firewall.mesh_wan_forwarding.src", env) == ""
 
     dropbear_state = (prefix / "var" / "dropbear-state").read_text()
     assert "disabled" in dropbear_state
