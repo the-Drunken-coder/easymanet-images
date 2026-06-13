@@ -23,6 +23,10 @@ json_get() {
     jsonfilter -s "$1" -e "$2" 2>/dev/null || true
 }
 
+is_mac_address() {
+    printf '%s' "$1" | grep -Eq '^[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]$'
+}
+
 lower() {
     printf '%s' "$1" | tr 'A-F' 'a-f'
 }
@@ -107,24 +111,55 @@ parse_batctl_neighbors() {
     function is_mac(value) {
         return value ~ /^[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]$/
     }
+    function clean_iface(value) {
+        gsub(/^\[/, "", value)
+        gsub(/\]$/, "", value)
+        return value
+    }
+    function clean_metric(value) {
+        gsub(/[()]/, "", value)
+        return value
+    }
     {
-        for (i = 1; i <= NF; i++) {
-            if (!is_mac($i)) {
-                continue
-            }
-            iface = i > 1 ? $(i - 1) : ""
-            if (iface !~ /^[A-Za-z0-9_.:-]+$/) {
-                iface = ""
-            }
-            mac = tolower($i)
-            last_seen = i < NF ? $(i + 1) : ""
+        if (is_mac($1)) {
+            mac = tolower($1)
+            last_seen = NF >= 2 ? $2 : ""
             throughput = ""
-            for (j = i + 2; j <= NF; j++) {
-                throughput = throughput (throughput == "" ? "" : " ") $j
+            iface = ""
+            for (i = 3; i <= NF; i++) {
+                if ($i == "[" && i < NF) {
+                    iface = clean_iface($(i + 1))
+                    i++
+                    continue
+                }
+                if ($i ~ /^\[/) {
+                    iface = clean_iface($i)
+                    continue
+                }
+                if ($i ~ /\]$/) {
+                    iface = clean_iface($i)
+                    continue
+                }
+                value = clean_metric($i)
+                if (value != "") {
+                    throughput = throughput (throughput == "" ? "" : " ") value
+                }
             }
-            gsub(/[()]/, "", throughput)
             print iface "\t" mac "\t" last_seen "\t" throughput
             next
+        }
+        if (NF >= 2 && is_mac($2)) {
+            iface = $1
+            mac = tolower($2)
+            last_seen = NF >= 3 ? $3 : ""
+            throughput = ""
+            for (i = 4; i <= NF; i++) {
+                value = clean_metric($i)
+                if (value != "") {
+                    throughput = throughput (throughput == "" ? "" : " ") value
+                }
+            }
+            print iface "\t" mac "\t" last_seen "\t" throughput
         }
     }'
 }
@@ -134,22 +169,37 @@ parse_batctl_originators() {
     function is_mac(value) {
         return value ~ /^[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]$/
     }
+    function clean_iface(value) {
+        gsub(/^\[/, "", value)
+        gsub(/\]$/, "", value)
+        return value
+    }
     {
-        if (!is_mac($1)) {
+        originator_idx = 0
+        for (i = 1; i <= NF; i++) {
+            if (is_mac($i)) {
+                originator_idx = i
+                break
+            }
+        }
+        if (originator_idx == 0) {
             next
         }
-        originator = tolower($1)
-        last_seen = $2
+        originator = tolower($originator_idx)
+        last_seen = originator_idx < NF ? $(originator_idx + 1) : ""
         nexthop = ""
         outgoing_if = ""
-        for (i = 3; i <= NF; i++) {
+        for (i = originator_idx + 2; i <= NF; i++) {
             if (is_mac($i)) {
                 nexthop = tolower($i)
             }
-            if ($i ~ /^\[[^]]+\]$/) {
-                outgoing_if = $i
-                gsub(/^\[/, "", outgoing_if)
-                gsub(/\]$/, "", outgoing_if)
+            if ($i == "[" && i < NF) {
+                outgoing_if = clean_iface($(i + 1))
+                i++
+                continue
+            }
+            if ($i ~ /^\[/ || $i ~ /\]$/) {
+                outgoing_if = clean_iface($i)
             }
         }
         print originator "\t" last_seen "\t" nexthop "\t" outgoing_if
@@ -206,6 +256,10 @@ fetch_peer() {
     uclient-fetch -q -T "$FETCH_TIMEOUT" -O - "http://$ipaddr:$API_PORT/v1/$endpoint" 2>/dev/null || return 1
 }
 
+record_sep() {
+    printf '|'
+}
+
 append_node_record() {
     file="$1"
     identity="$2"
@@ -228,8 +282,10 @@ append_node_record() {
     [ -n "$role" ] || role="$fallback_role"
     [ -n "$target" ] || target="$fallback_target"
     [ -n "$ipaddr" ] || ipaddr="$fallback_ip"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$name" "$hostname" "$role" "$target" "$ipaddr" "$mesh_mac" "$bat0_mac" "$status" >> "$file"
+    sep="$(record_sep)"
+    printf '%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' \
+        "$name" "$sep" "$hostname" "$sep" "$role" "$sep" "$target" "$sep" \
+        "$ipaddr" "$sep" "$mesh_mac" "$sep" "$bat0_mac" "$sep" "$status" >> "$file"
 }
 
 append_neighbor_records() {
@@ -237,23 +293,30 @@ append_neighbor_records() {
     source_name="$2"
     source_mac="$3"
     neighbors="$4"
-    i=0
+    neighbor_index=0
+    sep="$(record_sep)"
     while :; do
-        mac="$(json_get "$neighbors" "@.neighbors[$i].mac")"
+        mac="$(json_get "$neighbors" "@.neighbors[$neighbor_index].mac")"
         [ -n "$mac" ] || break
-        iface="$(json_get "$neighbors" "@.neighbors[$i].iface")"
-        last_seen="$(json_get "$neighbors" "@.neighbors[$i].last_seen")"
-        throughput="$(json_get "$neighbors" "@.neighbors[$i].throughput")"
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-            "$source_name" "$source_mac" "$mac" "$iface" "$last_seen" "$throughput" >> "$file"
-        i=$((i + 1))
+        if ! is_mac_address "$mac"; then
+            neighbor_index=$((neighbor_index + 1))
+            continue
+        fi
+        iface="$(json_get "$neighbors" "@.neighbors[$neighbor_index].iface")"
+        last_seen="$(json_get "$neighbors" "@.neighbors[$neighbor_index].last_seen")"
+        throughput="$(json_get "$neighbors" "@.neighbors[$neighbor_index].throughput")"
+        printf '%s%s%s%s%s%s%s%s%s%s%s\n' \
+            "$source_name" "$sep" "$source_mac" "$sep" "$mac" "$sep" \
+            "$iface" "$sep" "$last_seen" "$sep" "$throughput" >> "$file"
+        neighbor_index=$((neighbor_index + 1))
     done
 }
 
 resolve_node_by_mac() {
     nodes_file="$1"
     mac="$(lower "$2")"
-    awk -F '\t' -v mac="$mac" '
+    sep="$(record_sep)"
+    awk -F "$sep" -v mac="$mac" '
         tolower($6) == mac || tolower($7) == mac { print $1; exit }
     ' "$nodes_file"
 }
@@ -261,8 +324,8 @@ resolve_node_by_mac() {
 nodes_json_from_file() {
     file="$1"
     first=1
-    tab="$(printf '\t')"
-    while IFS="$tab" read -r name hostname role target ipaddr mesh_mac bat0_mac status; do
+    sep="$(record_sep)"
+    while IFS="$sep" read -r name hostname role target ipaddr mesh_mac bat0_mac status; do
         [ -n "$name$ipaddr" ] || continue
         [ "$first" -eq 1 ] || printf ','
         first=0
@@ -282,8 +345,8 @@ links_json_from_file() {
     links_file="$1"
     nodes_file="$2"
     first=1
-    tab="$(printf '\t')"
-    while IFS="$tab" read -r source source_mac neighbor_mac iface last_seen throughput; do
+    sep="$(record_sep)"
+    while IFS="$sep" read -r source source_mac neighbor_mac iface last_seen throughput; do
         [ -n "$source$neighbor_mac" ] || continue
         target="$(resolve_node_by_mac "$nodes_file" "$neighbor_mac")"
         status="resolved"

@@ -16,22 +16,44 @@ def walk(obj, keys):
     for key in keys:
         if key == "":
             continue
+        match = re.fullmatch(r"([^[]+)(?:\[(\d+)\])?", key)
+        if not match:
+            return None
+        key = match.group(1)
+        index = match.group(2)
         if isinstance(cur, dict):
             cur = cur.get(key)
         else:
             return None
+        if index is not None:
+            if not isinstance(cur, list):
+                return None
+            idx = int(index)
+            if idx >= len(cur):
+                return None
+            cur = cur[idx]
     return cur
 
 
 def main() -> int:
-    if len(sys.argv) < 4 or sys.argv[1] != "-i" or "-e" not in sys.argv:
+    if len(sys.argv) < 4 or "-e" not in sys.argv:
         return 1
-    path = sys.argv[2]
+    if "-i" in sys.argv:
+        source_idx = sys.argv.index("-i") + 1
+        if source_idx >= len(sys.argv):
+            return 1
+        data = load_json(sys.argv[source_idx])
+    elif "-s" in sys.argv:
+        source_idx = sys.argv.index("-s") + 1
+        if source_idx >= len(sys.argv):
+            return 1
+        data = json.loads(sys.argv[source_idx])
+    else:
+        return 1
     expr_idx = sys.argv.index("-e") + 1
     if expr_idx >= len(sys.argv):
         return 1
     expr = sys.argv[expr_idx]
-    data = load_json(path)
 
     if expr.endswith("[*]"):
         if not expr.startswith("@."):

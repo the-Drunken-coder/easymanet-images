@@ -453,6 +453,30 @@ wlan0          bc:2a:33:96:af:68     0.430s (7.1)
     assert result.stdout.strip() == "wlan0\tbc:2a:33:96:af:68\t0.430s\t7.1"
 
 
+def test_topology_api_parses_current_batctl_neighbors_fixture():
+    fixture = """
+[B.A.T.M.A.N. adv 2025.4-openwrt-2, MainIF/MAC: wlan0/bc:2a:33:96:af:2a (bat0/9a:55:24:91:92:4a BATMAN_V)]
+         Neighbor   last-seen      speed           IF
+bc:2a:33:96:af:68    0.090s (        7.2) [     wlan0]
+"""
+
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh")],
+        input=fixture,
+        env={
+            **os.environ,
+            "EASYMANET_API_TEST_MODE": "parse-neighbors",
+            "EASYMANET_LIB_DIR": str(OVERLAY / "usr" / "lib" / "easymanet"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "wlan0\tbc:2a:33:96:af:68\t0.090s\t7.2"
+
+
 def test_topology_api_parses_batctl_originators_fixture():
     fixture = """
 [B.A.T.M.A.N. adv 2023.1, MainIF/MAC: wlan0/c0:bf:be:ef:00:01 (bat0/aa:bb:cc:dd:ee:ff BATMAN_V)]
@@ -478,6 +502,162 @@ def test_topology_api_parses_batctl_originators_fixture():
         result.stdout.strip()
         == "bc:2a:33:96:af:68\t0.430s\tbc:2a:33:96:af:68\twlan0"
     )
+
+
+def test_topology_api_parses_current_batctl_originators_fixture():
+    fixture = """
+[B.A.T.M.A.N. adv 2025.4-openwrt-2, MainIF/MAC: wlan0/bc:2a:33:96:af:2a (bat0/9a:55:24:91:92:4a BATMAN_V)]
+   Originator        last-seen ( throughput)  Nexthop           [outgoingIF]
+ * bc:2a:33:96:af:68    0.700s (        7.2)  bc:2a:33:96:af:68 [     wlan0]
+"""
+
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh")],
+        input=fixture,
+        env={
+            **os.environ,
+            "EASYMANET_API_TEST_MODE": "parse-originators",
+            "EASYMANET_LIB_DIR": str(OVERLAY / "usr" / "lib" / "easymanet"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        result.stdout.strip()
+        == "bc:2a:33:96:af:68\t0.700s\tbc:2a:33:96:af:68\twlan0"
+    )
+
+
+def test_topology_api_does_not_skip_peer_after_self_neighbors(tmp_path):
+    provision_data = _gate_provision_json()
+    provision_data["fleet"] = {
+        "nodes": [
+            {
+                "name": "gate01",
+                "hostname": "gate01",
+                "role": "gate",
+                "target": "rpi4-mm6108-spi",
+                "ip": "10.41.1.1",
+            },
+            {
+                "name": "point01",
+                "hostname": "point01",
+                "role": "point",
+                "target": "rpi4-mm6108-spi",
+                "ip": "10.41.2.1",
+            },
+            {
+                "name": "point02",
+                "hostname": "point02",
+                "role": "point",
+                "target": "rpi4-mm6108-spi",
+                "ip": "10.41.3.1",
+            },
+        ]
+    }
+    provision_json = tmp_path / "provision.json"
+    provision_json.write_text(json.dumps(provision_data))
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "uci").write_text(
+        """#!/bin/sh
+if [ "$1" = "-q" ] && [ "$2" = "get" ] && [ "$3" = "wireless.mesh0.ifname" ]; then
+  echo wlan0
+fi
+"""
+    )
+    (bin_dir / "uci").chmod(0o755)
+    (bin_dir / "batctl").write_text(
+        """#!/bin/sh
+case "$1" in
+  n)
+    cat <<'EOF'
+[B.A.T.M.A.N. adv 2025.4-openwrt-2, MainIF/MAC: wlan0/bc:2a:33:96:af:2a (bat0/9a:55:24:91:92:4a BATMAN_V)]
+         Neighbor   last-seen      speed           IF
+bc:2a:33:96:af:68    0.090s (        7.2) [     wlan0]
+EOF
+    ;;
+  o)
+    cat <<'EOF'
+[B.A.T.M.A.N. adv 2025.4-openwrt-2, MainIF/MAC: wlan0/bc:2a:33:96:af:2a (bat0/9a:55:24:91:92:4a BATMAN_V)]
+   Originator        last-seen ( throughput)  Nexthop           [outgoingIF]
+ * bc:2a:33:96:af:68    0.700s (        7.2)  bc:2a:33:96:af:68 [     wlan0]
+EOF
+    ;;
+esac
+"""
+    )
+    (bin_dir / "batctl").chmod(0o755)
+    (bin_dir / "uclient-fetch").write_text(
+        """#!/bin/sh
+url=""
+for arg in "$@"; do
+  url="$arg"
+done
+case "$url" in
+  http://10.41.2.1:10411/v1/identity)
+    cat <<'EOF'
+{"ok":true,"generated_at":"2026-06-13T19:44:38Z","node":{"name":"point01","hostname":"point01","role":"point","target":"rpi4-mm6108-spi","ip":"10.41.2.1"},"interfaces":{"bat0_mac":"ba:31:cf:08:e3:24","mesh_iface":"wlan0","mesh_mac":"bc:2a:33:96:af:68"},"api":{"version":1,"port":10411}}
+EOF
+    ;;
+  http://10.41.2.1:10411/v1/neighbors)
+    cat <<'EOF'
+{"ok":true,"generated_at":"2026-06-13T19:44:47Z","node":{"name":"point01","hostname":"point01","role":"point","target":"rpi4-mm6108-spi","ip":"10.41.2.1"},"interfaces":{"bat0_mac":"ba:31:cf:08:e3:24","mesh_iface":"wlan0","mesh_mac":"bc:2a:33:96:af:68"},"neighbors":[{"iface":"bc:2a:33:96:af:2a","mac":"0.430s","last_seen":" 7.2 [ wlan0]","throughput":""}],"originators":[]}
+EOF
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+"""
+    )
+    (bin_dir / "uclient-fetch").chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{HARNESS}:{os.environ.get('PATH', '')}",
+        "EASYMANET_LIB_DIR": str(OVERLAY / "usr" / "lib" / "easymanet"),
+        "EASYMANET_PROVISION_JSON": str(provision_json),
+        "EASYMANET_API_FETCH_TIMEOUT": "1",
+    }
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh"), "topology"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert [node["name"] for node in payload["nodes"]] == [
+        "gate01",
+        "point01",
+        "point02",
+    ]
+    point01 = next(node for node in payload["nodes"] if node["name"] == "point01")
+    point02 = next(node for node in payload["nodes"] if node["name"] == "point02")
+    assert point01["status"] == "online"
+    assert point01["mesh_mac"] == "bc:2a:33:96:af:68"
+    assert point02["status"] == "offline"
+    assert point02["mesh_mac"] == ""
+
+    assert {
+        "source": "gate01",
+        "target": "point01",
+        "source_mac": "",
+        "target_mac": "bc:2a:33:96:af:68",
+        "iface": "wlan0",
+        "last_seen": "0.090s",
+        "throughput": "7.2",
+        "status": "resolved",
+    } in payload["links"]
+    assert all(link["target_mac"] != "0.430s" for link in payload["links"])
+    assert "point02 did not answer topology API at 10.41.3.1" in payload["warnings"]
 
 
 def test_provision_writes_valid_root_password_hash(tmp_path):
