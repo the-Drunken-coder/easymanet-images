@@ -112,6 +112,7 @@ write_easymanet_boot_report() {
 
     cp /var/log/easymanet.log "$latest/easymanet.log" 2>/dev/null || true
     cp /var/log/easymanet-network.log "$latest/easymanet-network.log" 2>/dev/null || true
+    cp /var/log/easymanet-led-status.log "$latest/easymanet-led-status.log" 2>/dev/null || true
     cp /etc/easymanet/provisioned "$latest/provisioned" 2>/dev/null || true
     cp /etc/config/network "$latest/config-network" 2>/dev/null || true
     easymanet_redact_config_mesh11sd > "$latest/config-mesh11sd" 2>/dev/null || true

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Enable the EasyMANET LED status service after overlay install.
+
+if [ -x /etc/init.d/easymanet-led-status ]; then
+    /etc/init.d/easymanet-led-status enable 2>/dev/null || true
+fi
+
+exit 0

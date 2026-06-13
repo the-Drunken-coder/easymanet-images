@@ -14,12 +14,15 @@ ROOT = Path(__file__).resolve().parents[1]
 OVERLAY_INSTALL_ROOT = Path("share/easymanet/images/openmanet/provisioning/openwrt-overlay")
 EXECUTABLE_OVERLAY_FILES = [
     "etc/init.d/easymanet-boot-report",
+    "etc/init.d/easymanet-led-status",
     "etc/init.d/easymanet-management-lan",
+    "etc/uci-defaults/96-easymanet-led-status",
     "etc/uci-defaults/97-easymanet-management-lan",
     "etc/uci-defaults/98-easymanet-boot-report",
     "etc/uci-defaults/99-easymanet",
     "usr/lib/easymanet/api.sh",
     "usr/lib/easymanet/boot-report.sh",
+    "usr/lib/easymanet/led-status.sh",
     "usr/lib/easymanet/network.sh",
     "usr/lib/easymanet/provision.sh",
     "www/easymanet-api/v1/identity",

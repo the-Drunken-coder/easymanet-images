@@ -147,6 +147,44 @@ def test_boot_report_hook_is_packaged_and_enabled():
     assert "write_easymanet_boot_report provisioned" in PROVISION_SCRIPT.read_text()
 
 
+def test_led_status_hook_is_packaged_enabled_and_reported():
+    script = OVERLAY / "usr" / "lib" / "easymanet" / "led-status.sh"
+    init = OVERLAY / "etc" / "init.d" / "easymanet-led-status"
+    defaults = OVERLAY / "etc" / "uci-defaults" / "96-easymanet-led-status"
+    report = OVERLAY / "usr" / "lib" / "easymanet" / "boot-report.sh"
+
+    assert script.exists()
+    assert init.exists()
+    assert defaults.exists()
+    assert script.stat().st_mode & 0o111
+    assert init.stat().st_mode & 0o111
+    assert defaults.stat().st_mode & 0o111
+
+    script_text = script.read_text()
+    assert "--once" in script_text
+    assert "EASYMANET_LED_NAME" in script_text
+    assert "EASYMANET_LED_TARGETS:=1.1.1.1 8.8.8.8" in script_text
+    assert "EASYMANET_LED_INTERVAL:=10" in script_text
+    assert "LED_ROOT:=/sys/class/leds" in script_text
+    assert "PWR" not in script_text
+    assert "echo none >" in script_text
+    assert "ping -c 1" in script_text
+
+    init_text = init.read_text()
+    assert "USE_PROCD=1" in init_text
+    assert "procd_set_param command /usr/lib/easymanet/led-status.sh" in init_text
+    assert "procd_set_param respawn" in init_text
+    assert "EASYMANET_LED_LOG=/var/log/easymanet-led-status.log" in init_text
+    assert "/etc/init.d/easymanet-led-status enable" in defaults.read_text()
+
+    provision_text = PROVISION_SCRIPT.read_text()
+    assert "led_status_init=" in provision_text
+    assert '"$led_status_init" enable' in provision_text
+    assert '"$led_status_init" restart' in provision_text
+    assert "EasyMANET LED status init script not found" in provision_text
+    assert "easymanet-led-status.log" in report.read_text()
+
+
 def test_topology_api_overlay_is_packaged():
     api = OVERLAY / "usr" / "lib" / "easymanet" / "api.sh"
     identity = OVERLAY / "www" / "easymanet-api" / "v1" / "identity"

@@ -220,6 +220,25 @@ esac
     stub.chmod(0o755)
 
 
+def _write_led_status_stub(prefix: Path) -> None:
+    init_dir = prefix / "etc" / "init.d"
+    init_dir.mkdir(parents=True, exist_ok=True)
+    state_file = prefix / "var" / "led-status-state"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    stub = init_dir / "easymanet-led-status"
+    stub.write_text(
+        f"""#!/bin/sh
+state_file="{state_file}"
+case "$1" in
+  enable) echo enabled >> "$state_file" ;;
+  restart) echo restarted >> "$state_file" ;;
+  start) echo started >> "$state_file" ;;
+esac
+"""
+    )
+    stub.chmod(0o755)
+
+
 def _write_network_channel_rewrite_stub(prefix: Path, channel: int) -> None:
     init_dir = prefix / "etc" / "init.d"
     init_dir.mkdir(parents=True, exist_ok=True)
@@ -323,6 +342,46 @@ def test_provision_point_node_disables_ssh(tmp_path):
 
     dropbear_state = (prefix / "var" / "dropbear-state").read_text()
     assert "disabled" in dropbear_state
+
+
+def test_provision_gate_node_starts_led_status_when_present(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    _write_led_status_stub(prefix)
+
+    result = _run_provision(prefix, _gate_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    led_state = (prefix / "var" / "led-status-state").read_text()
+    assert "enabled" in led_state
+    assert "restarted" in led_state
+
+
+def test_provision_point_node_starts_led_status_when_present(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    _write_led_status_stub(prefix)
+
+    result = _run_provision(prefix, _point_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    led_state = (prefix / "var" / "led-status-state").read_text()
+    assert "enabled" in led_state
+    assert "restarted" in led_state
+
+
+def test_provision_missing_led_status_service_is_nonfatal(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+
+    result = _run_provision(prefix, _gate_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "EasyMANET LED status init script not found" in (
+        prefix / "var" / "log" / "easymanet.log"
+    ).read_text()
 
 
 def test_provision_gate_exposes_topology_api_on_lan_and_mesh(tmp_path):

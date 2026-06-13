@@ -612,6 +612,15 @@ if [ -x "$openmanetd_init" ]; then
     "$openmanetd_init" enable 2>/dev/null || true
 fi
 
+led_status_init="$(_prefix_path /etc/init.d/easymanet-led-status)"
+if [ -x "$led_status_init" ]; then
+    echo "Enabling EasyMANET LED status..." >> "$LOG_FILE"
+    "$led_status_init" enable 2>/dev/null || true
+    "$led_status_init" restart 2>/dev/null || "$led_status_init" start 2>/dev/null || true
+else
+    echo "WARNING: EasyMANET LED status init script not found; LED status will not start" >> "$LOG_FILE"
+fi
+
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)" > "$PROVISIONED_FLAG"
 echo "hostname: $HOSTNAME" >> "$PROVISIONED_FLAG"
 echo "role: $NODE_ROLE" >> "$PROVISIONED_FLAG"
