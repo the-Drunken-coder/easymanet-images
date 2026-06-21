@@ -4,6 +4,20 @@ from pathlib import Path
 import yaml
 
 
+def public_image_workflow_paths(root: Path) -> tuple[Path, Path]:
+    authoring_template = root / "product_repos" / "templates" / "images"
+    if authoring_template.exists():
+        return (
+            authoring_template / ".github" / "workflows" / "image-release.yml",
+            authoring_template / "README.md",
+        )
+
+    return (
+        root / ".github" / "workflows" / "image-release.yml",
+        root / "README.md",
+    )
+
+
 def test_extra_packages_referenced_by_image_workflow():
     root = Path(__file__).resolve().parents[1]
     workflow_paths = (
@@ -23,10 +37,10 @@ def test_extra_packages_referenced_by_image_workflow():
 
 def test_public_image_readme_documents_workflow_steps_that_exist():
     root = Path(__file__).resolve().parents[1]
-    workflow_path = root / "product_repos" / "templates" / "images" / ".github" / "workflows" / "image-release.yml"
+    workflow_path, readme_path = public_image_workflow_paths(root)
     workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
     steps = {step.get("name"): step for step in workflow["jobs"]["build"]["steps"] if isinstance(step, dict)}
-    readme = (root / "product_repos" / "templates" / "images" / "README.md").read_text(encoding="utf-8")
+    readme = readme_path.read_text(encoding="utf-8")
 
     expected_operations = (
         ("generates checksums", "Generate release manifest", (".sha256", "sha_path.write_text")),
