@@ -10,6 +10,7 @@ blockers that another agent or developer may need to pick up.
 | --- | --- | --- |
 | [`docs/architecture.md`](architecture.md) | End-to-end provisioning flow and component responsibilities. | "How is EasyMANET wired together?" |
 | [`docs/monorepo.md`](monorepo.md) | Private monorepo layout, product surfaces, and public export behavior. | "Where does each product surface live?" |
+| [`docs/product-and-release-planning.md`](product-and-release-planning.md) | Historical product and release planning context. | "Why did the product surfaces take this shape?" |
 | [`docs/release.md`](release.md) | Version policy, release checklist, and artifact commands. | "How do we cut the first release?" |
 | [`docs/sample-fleet.md`](sample-fleet.md) | Starter fleet YAML and workspace copy command. | "What should my first fleet file look like?" |
 | [`docs/manifest.md`](manifest.md) | Reference for every field in `fleet.yml`. | "What config shape does this project accept?" |

@@ -11,6 +11,7 @@ from typing import Optional
 
 import typer
 
+from easymanet.diagnostics import export_support_bundle, import_boot_report, run_diagnostics
 from easymanet.disks import list_disks
 from easymanet.manifest import ManifestError, load_manifest
 from easymanet.platform import check_platform
@@ -23,10 +24,10 @@ from easymanet.workspace import (
     resolve_fleet_config,
     workspace_payload,
 )
-from easymanet_image.cli import register_image_commands
-
+from easymanet.support_bundle import create_support_bundle
 from .common import print_errors_and_warnings
 from .flash import register_flash_command
+from .image import register_image_commands
 
 app = typer.Typer(
     name="easymanet",
@@ -34,10 +35,72 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 image_app = typer.Typer(help="Manage image URLs, cache, and firmware builds")
+diagnostics_app = typer.Typer(help="Collect node diagnostics and support bundles")
 app.add_typer(image_app, name="image")
+app.add_typer(diagnostics_app, name="diagnostics")
 
 register_flash_command(app)
 register_image_commands(image_app)
+
+
+@diagnostics_app.command(name="run")
+def diagnostics_run_cmd(
+    config: str = typer.Option("", "--config", "-c", help="Path or workspace name for a fleet config"),
+):
+    """Collect live EasyMANET diagnostics and print a copyable summary."""
+    payload = run_diagnostics(config=config)
+    if payload.get("summary"):
+        typer.echo(payload["summary"])
+    if not payload.get("ok"):
+        for error in payload.get("errors", []):
+            typer.secho(f"Error: {error}", fg=typer.colors.RED)
+    raise typer.Exit(0 if payload.get("ok") else 1)
+
+
+@diagnostics_app.command(name="bundle")
+def diagnostics_bundle_cmd(
+    config: str = typer.Option("", "--config", "-c", help="Path or workspace name for a fleet config"),
+    node: str = typer.Option("", "--node", "-n", help="Node context to include in a local bundle"),
+    boot_report: str = typer.Option("", "--boot-report", help="Boot report file or directory to include"),
+    output: str = typer.Option("", "--output", "-o", help="Output .zip path for a local bundle"),
+    include_disks: bool = typer.Option(False, "--include-disks", help="Include removable disk inventory"),
+):
+    """Export a zip support bundle under the shared Diagnostics folder."""
+    if node or boot_report or output or include_disks:
+        result = create_support_bundle(
+            config=config,
+            node=node,
+            boot_report=boot_report,
+            output=output,
+            include_disks=include_disks,
+        )
+        typer.secho("Support bundle exported.", fg=typer.colors.GREEN)
+        typer.echo(f"  Path: {result.path}")
+        return
+
+    payload = export_support_bundle(config=config)
+    if payload.get("summary"):
+        typer.echo(payload["summary"])
+    if not payload.get("ok"):
+        for error in payload.get("errors", []):
+            typer.secho(f"Error: {error}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+    typer.secho(f"Support bundle: {payload.get('bundle_path', '')}", fg=typer.colors.GREEN)
+
+
+@diagnostics_app.command(name="import-boot-report")
+def diagnostics_import_boot_report_cmd(
+    source: str = typer.Option(..., "--source", "-s", help="Mounted boot drive or easymanet report folder"),
+):
+    """Import offline boot reports into the shared Diagnostics folder."""
+    payload = import_boot_report(source=source)
+    if not payload.get("ok"):
+        for error in payload.get("errors", []):
+            typer.secho(f"Error: {error}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+    typer.secho(f"Imported boot reports: {payload.get('target', '')}", fg=typer.colors.GREEN)
+    for path in payload.get("imported", []):
+        typer.echo(f"  {path}")
 
 
 @app.command(name="validate")

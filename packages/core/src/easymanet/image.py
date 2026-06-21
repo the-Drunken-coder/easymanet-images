@@ -5,13 +5,24 @@ and clean unmount/eject.
 """
 
 import os
-import re
 import shutil
 import subprocess
 import zlib
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
+from ._image_dd import (
+    ceil_div as _ceil_div_value,
+    command_error_message as _command_error_message,
+    dd_device_path as _platform_dd_device_path,
+    dd_progress_bytes,
+    stream_dd_block_args as _platform_stream_dd_block_args,
+    stream_dd_device_path as _platform_stream_dd_device_path,
+    write_block_size_arg as _platform_write_block_size_arg,
+)
+from ._image_validation import (
+    check_gzip_payload as _check_gzip_payload,
+)
 from .disks import (
     assert_flash_allowed,
     get_partition2_wipe_range,
@@ -27,7 +38,6 @@ class FlashError(Exception):
 
 
 FlashEventCallback = Callable[[dict[str, Any]], None]
-DD_PROGRESS_PATTERN = re.compile(r"(?P<bytes>\d+)\s+bytes")
 
 
 def _emit_event(
@@ -59,28 +69,6 @@ def _unmount_or_raise(device: str) -> None:
         unmount_disk(device)
     except (RuntimeError, OSError, subprocess.SubprocessError) as e:
         raise FlashError(f"Failed to unmount {device}: {e}") from e
-
-
-def _gzip_decompressed_bytes(image_path: Path) -> int:
-    decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
-    total = 0
-    with image_path.open("rb") as f:
-        while not decompressor.eof:
-            chunk = f.read(1024 * 1024)
-            if not chunk:
-                break
-            total += len(decompressor.decompress(chunk))
-
-    if not decompressor.eof:
-        raise zlib.error("compressed image ended before the gzip stream completed")
-    return total
-
-
-def _check_gzip_payload(image_path: Path) -> int:
-    total = _gzip_decompressed_bytes(image_path)
-    if total == 0:
-        raise zlib.error("compressed image did not contain a disk image payload")
-    return total
 
 
 def _check_image(image_path: str) -> Tuple[Path, Optional[int]]:
@@ -221,7 +209,10 @@ def _write_gz_via_dd(
     dd_proc = subprocess.Popen(dd_cmd, **dd_kwargs)
     gzip_proc.stdout.close()
 
-    dd_stderr = _drain_dd_progress(dd_proc, emit)
+    if emit is None:
+        _dd_stdout, dd_stderr = dd_proc.communicate()
+    else:
+        dd_stderr = _drain_dd_progress(dd_proc, emit)
     dd_return = dd_proc.wait()
     gzip_return = gzip_proc.wait()
 
@@ -234,43 +225,28 @@ def _write_gz_via_dd(
         raise subprocess.CalledProcessError(gzip_return, gzip_cmd)
 
 
-def _command_error_message(error: subprocess.CalledProcessError) -> str:
-    stderr = error.stderr
-    stdout = error.stdout
-    if isinstance(stderr, bytes):
-        stderr = stderr.decode(errors="replace")
-    if isinstance(stdout, bytes):
-        stdout = stdout.decode(errors="replace")
-    detail = str(stderr or stdout or "").strip()
-    return f"{error}: {detail}" if detail else str(error)
-
-
 _OVERLAY_WIPE_SECTOR_BYTES = 512
 _OVERLAY_WIPE_BULK_BYTES = 16 * 1024 * 1024
 
 
 def _dd_device_path(device: str) -> str:
-    if is_macos() and device.startswith("/dev/disk"):
-        return device.replace("/dev/disk", "/dev/rdisk", 1)
-    return device
+    return _platform_dd_device_path(device, macos=is_macos())
 
 
 def _stream_dd_device_path(device: str) -> str:
-    return _dd_device_path(device) if is_macos() else device
+    return _platform_stream_dd_device_path(device, macos=is_macos())
 
 
 def _stream_dd_block_args() -> list[str]:
-    if is_macos():
-        return ["ibs=16m", "obs=1m", "iflag=fullblock", "conv=osync"]
-    return [_write_block_size_arg()]
+    return _platform_stream_dd_block_args(macos=is_macos())
 
 
 def _write_block_size_arg() -> str:
-    return "bs=16m" if is_macos() else "bs=16M"
+    return _platform_write_block_size_arg(macos=is_macos())
 
 
 def _ceil_div(numerator: int, denominator: int) -> int:
-    return (numerator + denominator - 1) // denominator
+    return _ceil_div_value(numerator, denominator)
 
 
 def _run_zero_dd(
@@ -425,10 +401,10 @@ def _drain_dd_progress(
 def _emit_dd_progress(text: str, emit: FlashEventCallback | None) -> None:
     if not text:
         return
-    match = DD_PROGRESS_PATTERN.search(text)
     data: dict[str, Any] = {"raw": text}
-    if match:
-        data["bytes"] = int(match.group("bytes"))
+    bytes_written = dd_progress_bytes(text)
+    if bytes_written is not None:
+        data["bytes"] = bytes_written
     if emit:
         emit({"type": "dd_progress", "message": text, **data})
 

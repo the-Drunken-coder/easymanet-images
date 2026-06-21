@@ -172,8 +172,13 @@ def _point_provision_json() -> dict:
 
 def _copy_api_overlay(prefix: Path) -> None:
     for relative in (
+        "usr/lib/easymanet/api-lib.sh",
+        "usr/lib/easymanet/api.sh",
+        "usr/lib/easymanet/provision-lib.sh",
+        "usr/lib/easymanet/status-lib.sh",
         "www/easymanet-api/v1/identity",
         "www/easymanet-api/v1/neighbors",
+        "www/easymanet-api/v1/status",
         "www/easymanet-api/v1/topology",
     ):
         source = OVERLAY / relative
@@ -226,6 +231,25 @@ def _write_led_status_stub(prefix: Path) -> None:
     state_file = prefix / "var" / "led-status-state"
     state_file.parent.mkdir(parents=True, exist_ok=True)
     stub = init_dir / "easymanet-led-status"
+    stub.write_text(
+        f"""#!/bin/sh
+state_file="{state_file}"
+case "$1" in
+  enable) echo enabled >> "$state_file" ;;
+  restart) echo restarted >> "$state_file" ;;
+  start) echo started >> "$state_file" ;;
+esac
+"""
+    )
+    stub.chmod(0o755)
+
+
+def _write_display_status_stub(prefix: Path) -> None:
+    init_dir = prefix / "etc" / "init.d"
+    init_dir.mkdir(parents=True, exist_ok=True)
+    state_file = prefix / "var" / "display-status-state"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    stub = init_dir / "easymanet-display-status"
     stub.write_text(
         f"""#!/bin/sh
 state_file="{state_file}"
@@ -385,9 +409,26 @@ def test_provision_missing_led_status_service_is_nonfatal(tmp_path):
     assert "EasyMANET LED status init script not found" in (
         prefix / "var" / "log" / "easymanet.log"
     ).read_text()
+    assert "EasyMANET display status init script not found" in (
+        prefix / "var" / "log" / "easymanet.log"
+    ).read_text()
 
 
-def test_provision_gate_exposes_topology_api_on_lan_and_mesh(tmp_path):
+def test_provision_gate_node_starts_display_status_when_present(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    _write_display_status_stub(prefix)
+
+    result = _run_provision(prefix, _gate_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    display_state = (prefix / "var" / "display-status-state").read_text()
+    assert "enabled" in display_state
+    assert "restarted" in display_state
+
+
+def test_provision_gate_exposes_topology_api_on_management_and_mesh_only(tmp_path):
     prefix = tmp_path / "root"
     uci_state = tmp_path / "uci-state"
     _seed_wireless_radios(uci_state)
@@ -404,13 +445,10 @@ def test_provision_gate_exposes_topology_api_on_lan_and_mesh(tmp_path):
     assert _uci_get(uci_state, "uhttpd.easymanet_api.cgi_prefix", env) == "/v1"
     assert (
         _uci_get(uci_state, "uhttpd.easymanet_api.listen_http", env)
-        == "0.0.0.0:10411"
+        == "10.41.254.1:10411 10.41.1.1:10411"
     )
-    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.src", env) == "wan"
-    assert (
-        _uci_get(uci_state, "firewall.allow_easymanet_api_wan.dest_port", env)
-        == "10411"
-    )
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.src", env) == ""
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.dest_port", env) == ""
     assert "restarted" in (prefix / "var" / "uhttpd-state").read_text()
 
 
@@ -430,6 +468,35 @@ def test_provision_point_exposes_topology_api_only_on_mesh_ip(tmp_path):
         == "10.41.2.1:10411"
     )
     assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.src", env) == ""
+
+
+def test_provision_clears_stale_topology_api_when_assets_missing(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    commit_log = tmp_path / "uci-commits.log"
+    _seed_wireless_radios(uci_state)
+    with uci_state.open("a") as state:
+        state.write("uhttpd.easymanet_api=uhttpd\n")
+        state.write("uhttpd.easymanet_api.home='/old/easymanet-api'\n")
+        state.write("uhttpd.easymanet_api.listen_http='0.0.0.0:10411'\n")
+    _write_uhttpd_stub(prefix)
+
+    result = _run_provision(
+        prefix,
+        _gate_provision_json(),
+        uci_state,
+        extra_env={"UCI_COMMIT_LOG": str(commit_log)},
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    env = _harness_env(uci_state)
+    assert _uci_get(uci_state, "uhttpd.easymanet_api.home", env) == ""
+    assert _uci_get(uci_state, "uhttpd.easymanet_api.listen_http", env) == ""
+    assert "uhttpd" in commit_log.read_text().splitlines()
+    assert not (prefix / "var" / "uhttpd-state").exists()
+    assert "EasyMANET API endpoint wrappers are missing" in (
+        prefix / "var" / "log" / "easymanet.log"
+    ).read_text()
 
 
 def test_topology_api_parses_batctl_neighbors_fixture():
@@ -532,6 +599,375 @@ def test_topology_api_parses_current_batctl_originators_fixture():
         result.stdout.strip()
         == "bc:2a:33:96:af:68\t0.700s\tbc:2a:33:96:af:68\twlan0"
     )
+
+
+def _write_status_bins(bin_dir: Path, *, ping_ok: bool = True, neighbors: bool = True) -> None:
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "ping").write_text(
+        "#!/bin/sh\n" + ("exit 0\n" if ping_ok else "exit 1\n")
+    )
+    neighbor_body = """cat <<'EOF'
+[B.A.T.M.A.N. adv 2025.4-openwrt-2, MainIF/MAC: wlan0/bc:2a:33:96:af:2a (bat0/9a:55:24:91:92:4a BATMAN_V)]
+     Neighbor   last-seen      speed           IF
+bc:2a:33:96:af:68    0.090s (        7.2) [     wlan0]
+EOF"""
+    if not neighbors:
+        neighbor_body = "true"
+    (bin_dir / "batctl").write_text(
+        f"""#!/bin/sh
+case "$1" in
+  n)
+    {neighbor_body}
+    ;;
+  o)
+    true
+    ;;
+esac
+"""
+    )
+    (bin_dir / "ping").chmod(0o755)
+    (bin_dir / "batctl").chmod(0o755)
+
+
+def _status_env(tmp_path: Path, provision_data: dict, *, ping_ok: bool = True, neighbors: bool = True) -> dict:
+    provision_json = tmp_path / "provision.json"
+    provision_json.write_text(json.dumps(provision_data))
+    provisioned = tmp_path / "provisioned"
+    provisioned.write_text("provisioned\n")
+    bin_dir = tmp_path / "bin"
+    _write_status_bins(bin_dir, ping_ok=ping_ok, neighbors=neighbors)
+    api_home = tmp_path / "www" / "easymanet-api"
+    (api_home / "v1").mkdir(parents=True)
+    status_wrapper = api_home / "v1" / "status"
+    status_wrapper.write_text("#!/bin/sh\n")
+    status_wrapper.chmod(0o755)
+    return {
+        **os.environ,
+        "PATH": f"{bin_dir}:{HARNESS}:{os.environ.get('PATH', '')}",
+        "EASYMANET_LIB_DIR": str(OVERLAY / "usr" / "lib" / "easymanet"),
+        "EASYMANET_PROVISION_JSON": str(provision_json),
+        "EASYMANET_PROVISIONED_FLAG": str(provisioned),
+        "EASYMANET_API_HOME": str(api_home),
+        "EASYMANET_API_SCRIPT": str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh"),
+        "UCI_STATE_FILE": str(tmp_path / "uci-state"),
+    }
+
+
+def _copy_status_lib_dir(tmp_path: Path) -> Path:
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    for name in ("provision-lib.sh", "api-lib.sh", "status-lib.sh"):
+        shutil.copy2(OVERLAY / "usr" / "lib" / "easymanet" / name, lib_dir / name)
+    return lib_dir
+
+
+def test_status_api_reports_point_node_local_status(tmp_path):
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh"), "status"],
+        env=_status_env(tmp_path, _point_provision_json()),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["support_code"] == "EM-OK"
+    assert payload["node"]["name"] == "point01"
+    assert payload["mesh"]["neighbor_count"] == 1
+    assert payload["internet"]["ok"] is True
+    assert payload["manageability"]["ok"] is True
+    assert payload["fleet"] == []
+
+
+def test_status_helper_failure_does_not_break_identity_endpoint(tmp_path):
+    lib_dir = _copy_status_lib_dir(tmp_path)
+    (lib_dir / "status-lib.sh").write_text("this is not valid shell syntax (\n")
+    env = _status_env(tmp_path, _point_provision_json())
+    env["EASYMANET_LIB_DIR"] = str(lib_dir)
+
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh"), "identity"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["node"]["name"] == "point01"
+
+
+def test_status_helper_failure_returns_status_fallback(tmp_path):
+    lib_dir = _copy_status_lib_dir(tmp_path)
+    (lib_dir / "status-lib.sh").write_text("this is not valid shell syntax (\n")
+    env = _status_env(tmp_path, _point_provision_json())
+    env["EASYMANET_LIB_DIR"] = str(lib_dir)
+
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh"), "status"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["support_code"] == "EM-DIAG-PARTIAL"
+    assert "status endpoint failed" in payload["warnings"][0]
+
+
+def test_status_api_reports_public_internet_down(tmp_path):
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh"), "status"],
+        env=_status_env(tmp_path, _point_provision_json(), ping_ok=False),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["support_code"] == "EM-INET-DOWN"
+    assert payload["internet"]["ok"] is False
+
+
+def test_status_api_reports_gateway_missing_fleet_node(tmp_path):
+    provision_data = _gate_provision_json()
+    provision_data["fleet"] = {
+        "nodes": [
+            {"name": "gate01", "hostname": "gate01", "role": "gate", "target": "rpi4-mm6108-spi", "ip": "10.41.1.1"},
+            {"name": "point01", "hostname": "point01", "role": "point", "target": "rpi4-mm6108-spi", "ip": "10.41.2.1"},
+        ]
+    }
+    bin_dir = tmp_path / "bin"
+    env = _status_env(tmp_path, provision_data)
+    (bin_dir / "uclient-fetch").write_text("#!/bin/sh\nexit 1\n")
+    (bin_dir / "uclient-fetch").chmod(0o755)
+
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh"), "status"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["support_code"] == "EM-NODE-MISSING"
+    assert {"name": "point01", "status": "MISSING"} in payload["fleet"]
+    assert {"name": "gate01", "status": "OK"} in payload["fleet"]
+
+
+def test_status_api_reports_gateway_unknown_fleet_when_topology_fails(tmp_path):
+    provision_data = _gate_provision_json()
+    provision_data["fleet"] = {
+        "nodes": [
+            {"name": "gate01", "hostname": "gate01", "role": "gate", "target": "rpi4-mm6108-spi", "ip": "10.41.1.1"},
+            {"name": "point01", "hostname": "point01", "role": "point", "target": "rpi4-mm6108-spi", "ip": "10.41.2.1"},
+        ]
+    }
+    provision_json = tmp_path / "provision.json"
+    provision_json.write_text(json.dumps(provision_data))
+    script = f'''
+PROVISION_JSON="{provision_json}"
+SCRIPT_DIR="{OVERLAY / "usr" / "lib" / "easymanet"}"
+. "$SCRIPT_DIR/provision-lib.sh"
+. "$SCRIPT_DIR/api-lib.sh"
+. "$SCRIPT_DIR/status-lib.sh"
+is_gateway() {{ return 0; }}
+topology_json_body() {{ printf '%s\\n' '{{"ok":false}}'; }}
+status_fleet_json "{tmp_path / "missing.txt"}"
+'''
+
+    result = subprocess.run(
+        ["sh", "-c", script],
+        env={**os.environ, "PATH": f"{HARNESS}:{os.environ.get('PATH', '')}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert {"name": "gate01", "status": "UNKNOWN"} in payload
+    assert {"name": "point01", "status": "UNKNOWN"} in payload
+
+
+def test_display_status_renders_copyable_console_text(tmp_path):
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "display-status.sh"), "--once"],
+        env=_status_env(tmp_path, _point_provision_json()),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "point01" in result.stdout
+    assert "MESH" in result.stdout
+    assert "CODE" in result.stdout
+
+
+def test_status_memory_text_formats_meminfo_kib_as_mib(tmp_path):
+    result = subprocess.run(
+        [
+            "sh",
+            "-c",
+            f'. "{OVERLAY / "usr" / "lib" / "easymanet" / "status-lib.sh"}"; memory_text 1048576 262144',
+        ],
+        env=_status_env(tmp_path, _point_provision_json()),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "768/1024MiB (75%)"
+
+
+def test_boot_report_status_generation_failure_is_nonfatal(tmp_path):
+    lib_dir = _copy_status_lib_dir(tmp_path)
+    (lib_dir / "status-lib.sh").write_text("this is not valid shell syntax (\n")
+    provision_json = tmp_path / "provision.json"
+    provision_json.write_text(json.dumps(_point_provision_json()))
+
+    script = f'''
+EASYMANET_LIB_DIR="{lib_dir}"
+EASYMANET_PROVISION_JSON="{provision_json}"
+. "{OVERLAY / "usr" / "lib" / "easymanet" / "boot-report.sh"}"
+write_easymanet_status_json
+'''
+    result = subprocess.run(
+        ["sh", "-c", script],
+        env={**os.environ, "PATH": f"{HARNESS}:{os.environ.get('PATH', '')}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["support_code"] == "EM-DIAG-PARTIAL"
+    assert "boot report collection continued" in payload["warnings"][0]
+
+
+def test_topology_api_escapes_control_characters_in_json_string():
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh")],
+        input='gate"\n\t\r01',
+        env={
+            **os.environ,
+            "EASYMANET_API_TEST_MODE": "json-escape",
+            "EASYMANET_LIB_DIR": str(OVERLAY / "usr" / "lib" / "easymanet"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == 'gate"\n\t\r01'
+
+
+def test_topology_api_reports_scratch_dir_creation_failure(tmp_path):
+    provision_json = tmp_path / "provision.json"
+    provision_json.write_text(json.dumps(_gate_provision_json()))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "mktemp").write_text(
+        """#!/bin/sh
+exit 1
+"""
+    )
+    (bin_dir / "mktemp").chmod(0o755)
+
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh"), "topology"],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{HARNESS}:{os.environ.get('PATH', '')}",
+            "EASYMANET_LIB_DIR": str(OVERLAY / "usr" / "lib" / "easymanet"),
+            "EASYMANET_PROVISION_JSON": str(provision_json),
+            "UCI_STATE_FILE": str(tmp_path / "uci-state"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["code"] == "scratch_init_failed"
+    assert "scratch directory" in payload["errors"][0]
+
+
+def test_topology_api_bounds_offline_peer_probes(tmp_path):
+    provision_data = _gate_provision_json()
+    provision_data["fleet"] = {
+        "nodes": [
+            {
+                "name": "gate01",
+                "hostname": "gate01",
+                "role": "gate",
+                "target": "rpi4-mm6108-spi",
+                "ip": "10.41.1.1",
+            },
+            {
+                "name": "point01",
+                "hostname": "point01",
+                "role": "point",
+                "target": "rpi4-mm6108-spi",
+                "ip": "10.41.2.1",
+            },
+            {
+                "name": "point02",
+                "hostname": "point02",
+                "role": "point",
+                "target": "rpi4-mm6108-spi",
+                "ip": "10.41.3.1",
+            },
+        ]
+    }
+    provision_json = tmp_path / "provision.json"
+    provision_json.write_text(json.dumps(provision_data))
+    request_log = tmp_path / "requests.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "uclient-fetch").write_text(
+        f"""#!/bin/sh
+echo "$*" >> "{request_log}"
+exit 1
+"""
+    )
+    (bin_dir / "uclient-fetch").chmod(0o755)
+
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh"), "topology"],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{HARNESS}:{os.environ.get('PATH', '')}",
+            "EASYMANET_LIB_DIR": str(OVERLAY / "usr" / "lib" / "easymanet"),
+            "EASYMANET_PROVISION_JSON": str(provision_json),
+            "EASYMANET_API_MAX_TOPOLOGY_PEER_PROBES": "1",
+            "UCI_STATE_FILE": str(tmp_path / "uci-state"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert request_log.read_text().count("/v1/identity") == 1
+    assert "point01 did not answer topology API at 10.41.2.1" in payload["warnings"]
+    assert "point02 skipped after topology probe limit (1)" in payload["warnings"]
 
 
 def test_topology_api_does_not_skip_peer_after_self_neighbors(tmp_path):
@@ -890,6 +1326,7 @@ def test_provision_requires_node_ip(tmp_path):
         (("node", "hostname"), "node.hostname"),
         (("node", "role"), "node.role"),
         (("node", "ip"), "node.ip"),
+        (("node", "target"), "node.target"),
     ],
 )
 def test_provision_reports_missing_required_fields(tmp_path, field_path, expected):
@@ -911,9 +1348,11 @@ def test_provision_reports_missing_required_fields(tmp_path, field_path, expecte
     [
         (("version",), 2, "unsupported provision.json version"),
         (("node", "role"), "relay", "unsupported node.role"),
+        (("node", "target"), "rpi5", "unsupported node.target"),
         (("mesh", "bandwidth_mhz"), 3, "unsupported mesh.bandwidth_mhz"),
         (("mesh", "bandwidth_mhz"), 4, "rpi4-mm6108-spi in US requires"),
         (("mesh", "channel"), 36, "rpi4-mm6108-spi in US requires"),
+        (("mesh", "channel"), 0, "rpi4-mm6108-spi in US requires"),
         (("mesh", "channel"), "abc", "mesh.channel must be numeric"),
     ],
 )

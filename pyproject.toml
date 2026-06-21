@@ -66,6 +66,7 @@ include = [
 ]
 "share/easymanet/images/openmanet/provisioning/openwrt-overlay/etc/init.d" = [
     "images/openmanet/provisioning/openwrt-overlay/etc/init.d/easymanet-boot-report",
+    "images/openmanet/provisioning/openwrt-overlay/etc/init.d/easymanet-display-status",
     "images/openmanet/provisioning/openwrt-overlay/etc/init.d/easymanet-led-status",
     "images/openmanet/provisioning/openwrt-overlay/etc/init.d/easymanet-management-lan",
 ]
@@ -73,22 +74,28 @@ include = [
     "images/openmanet/provisioning/openwrt-overlay/etc/sysctl.d/99-easymanet.conf",
 ]
 "share/easymanet/images/openmanet/provisioning/openwrt-overlay/etc/uci-defaults" = [
+    "images/openmanet/provisioning/openwrt-overlay/etc/uci-defaults/95-easymanet-display-status",
     "images/openmanet/provisioning/openwrt-overlay/etc/uci-defaults/96-easymanet-led-status",
     "images/openmanet/provisioning/openwrt-overlay/etc/uci-defaults/97-easymanet-management-lan",
     "images/openmanet/provisioning/openwrt-overlay/etc/uci-defaults/98-easymanet-boot-report",
     "images/openmanet/provisioning/openwrt-overlay/etc/uci-defaults/99-easymanet",
 ]
 "share/easymanet/images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet" = [
+    "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/api-lib.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/api.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/boot-report.sh",
+    "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/display-status.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/led-status.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/network.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/provision-lib.sh",
+    "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/provision-runtime.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/provision.sh",
+    "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/status-lib.sh",
 ]
 "share/easymanet/images/openmanet/provisioning/openwrt-overlay/www/easymanet-api/v1" = [
     "images/openmanet/provisioning/openwrt-overlay/www/easymanet-api/v1/identity",
     "images/openmanet/provisioning/openwrt-overlay/www/easymanet-api/v1/neighbors",
+    "images/openmanet/provisioning/openwrt-overlay/www/easymanet-api/v1/status",
     "images/openmanet/provisioning/openwrt-overlay/www/easymanet-api/v1/topology",
 ]
 

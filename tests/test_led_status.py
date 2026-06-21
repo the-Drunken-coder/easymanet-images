@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (
     ROOT
@@ -152,4 +154,38 @@ def test_led_status_missing_led_exits_cleanly(tmp_path):
     result = _run_once(tmp_path, led_root, {"PING_MODE": "success"})
 
     assert result.returncode == 0, result.stderr + result.stdout
+    assert "no green/ACT LED candidate" in (tmp_path / "led-status.log").read_text()
+
+
+def test_led_status_missing_led_stays_alive_in_loop_mode(tmp_path):
+    led_root = tmp_path / "leds"
+    led_root.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_fake_ping(bin_dir)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env.get('PATH', '')}",
+            "LED_ROOT": str(led_root),
+            "EASYMANET_LED_INTERVAL": "1",
+            "EASYMANET_LED_LOG": str(tmp_path / "led-status.log"),
+            "PING_LOG": str(tmp_path / "ping.log"),
+        }
+    )
+
+    proc = subprocess.Popen(
+        ["sh", str(SCRIPT)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            proc.wait(timeout=0.2)
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+
     assert "no green/ACT LED candidate" in (tmp_path / "led-status.log").read_text()

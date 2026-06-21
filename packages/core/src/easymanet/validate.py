@@ -15,7 +15,7 @@ VALID_ROLES = {"gate", "point"}
 VALID_TARGETS = {"rpi4-mm6108-spi"}
 VALID_BANDWIDTHS = {1, 2, 4, 8}
 MM6108_TARGET = "rpi4-mm6108-spi"
-MM6108_US_VALID_MESH = {(0, 2), (42, 2)}
+MM6108_US_VALID_MESH = {(42, 2)}
 VALID_WIFI_ENCRYPTION = {"psk2", "sae", "none", "psk", "psk-mixed"}
 COUNTRY_PATTERN = re.compile(r"^[A-Z]{2}$")
 
@@ -90,11 +90,17 @@ def validate(manifest: Manifest, node_name: Optional[str] = None) -> ValidationR
             result.add_error("mesh.channel is required")
         if mesh.get("bandwidth_mhz") is None:
             result.add_error("mesh.bandwidth_mhz is required")
-        elif mesh["bandwidth_mhz"] not in VALID_BANDWIDTHS:
-            result.add_error(
-                f"mesh.bandwidth_mhz must be one of {sorted(VALID_BANDWIDTHS)}, "
-                f"got {mesh['bandwidth_mhz']}"
-            )
+        else:
+            bandwidth = _as_int(mesh["bandwidth_mhz"])
+            if bandwidth is None:
+                result.add_error(
+                    f"mesh.bandwidth_mhz must be numeric, got '{mesh['bandwidth_mhz']}'"
+                )
+            elif bandwidth not in VALID_BANDWIDTHS:
+                result.add_error(
+                    f"mesh.bandwidth_mhz must be one of {sorted(VALID_BANDWIDTHS)}, "
+                    f"got {mesh['bandwidth_mhz']}"
+                )
         country = mesh.get("country", "")
         if not country:
             result.add_error("mesh.country is required")
@@ -263,6 +269,11 @@ def _validate_target_mesh_settings(
     country = str(mesh.get("country", ""))
     if mesh.get("channel") is not None and channel is None:
         result.add_error(f"mesh.channel must be numeric, got '{mesh.get('channel')}'")
+        return
+    if mesh.get("bandwidth_mhz") is not None and bandwidth is None:
+        message = f"mesh.bandwidth_mhz must be numeric, got '{mesh.get('bandwidth_mhz')}'"
+        if message not in result.errors:
+            result.add_error(message)
         return
     if channel is None or bandwidth is None or bandwidth not in VALID_BANDWIDTHS:
         return

@@ -17,52 +17,54 @@ Or pass --image-url to flash command.
 """
 
 import json
-import hashlib
 import os
-import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
 import urllib.request
 import urllib.error
-from urllib.parse import urlparse
-import zlib
+from glob import escape as glob_escape
 from pathlib import Path
-from typing import Any, Callable, NamedTuple, Optional
+from typing import Any, Callable, Optional
 
+from ._download_integrity import (
+    SHA256_PATTERN,
+    image_sha256,
+    normalize_sha256,
+    valid_image_payload as _valid_image_payload,
+    verify_image_sha256,
+)
+from ._download_release import (
+    ImageRef,
+    _GITHUB_API_ERRORS,
+    _candidate_checksum_assets,
+    _check_github_release,
+    _checksum_filename_matches,
+    _extract_sha256_from_checksum_text,
+    _fetch_checksum_text,
+    _fetch_github_release,
+    _fetch_release_manifest,
+    _image_ref_from_release_manifest,
+    _pick_manifest_release_asset,
+    _pick_release_asset,
+    _sha256_for_release_asset,
+    _sha256_from_asset_digest,
+    _url_to_filename,
+    _urlopen_with_retries,
+    _validate_download_url,
+)
 from . import __version__
 from .format import human_size
 from .workspace import images_dir
+from .release_trust import CUSTOM_TRUST_STATUS, OFFICIAL_TRUST_STATUS, PENDING_TRUST_STATUS
 
 DownloadEventCallback = Callable[[dict[str, Any]], None]
 
 DEFAULT_EASYMANET_GITHUB_REPO = "the-Drunken-coder/easymanet"
 DEFAULT_IMAGE_GITHUB_REPO = "the-Drunken-coder/easymanet-images"
-IMAGE_RELEASE_MANIFEST_ASSETS = {
-    "easymanet-image-release.json",
-    "easymanet-images.json",
-}
-
-_GITHUB_API_ERRORS = (
-    urllib.error.URLError,
-    json.JSONDecodeError,
-    OSError,
-    TimeoutError,
-    ValueError,
-)
-_URL_RETRY_ERRORS = (urllib.error.URLError, OSError, TimeoutError)
-_URL_RETRY_ATTEMPTS = 3
-_URL_RETRY_BACKOFF_SECONDS = 0.25
-_RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 _DOWNLOAD_CHUNK_BYTES = 1024 * 1024
-
-SHA256_PATTERN = re.compile(r"^[a-fA-F0-9]{64}$")
-
-
-class ImageRef(NamedTuple):
-    version: str
-    url: str
-    sha256: Optional[str] = None
 
 
 def _debug_note(message: str) -> None:
@@ -152,275 +154,18 @@ def check_latest_version(target: str) -> Optional[ImageRef]:
             except ValueError as exc:
                 _debug_note(f"invalid SHA-256 configured for {target}: {exc}")
                 sha256 = None
-        return ImageRef(info.get("version", "latest"), info["url"], sha256)
+        return ImageRef(
+            info.get("version", "latest"),
+            info["url"],
+            sha256,
+            trust_status=CUSTOM_TRUST_STATUS,
+            source="custom",
+            warnings=("Custom image is checksum-only and not an official EasyMANET release.",),
+        )
 
     github_repo = info.get("github") or DEFAULT_IMAGE_GITHUB_REPO
-    return _check_github_release(github_repo, target)
-
-
-def _fetch_github_release(repo: str) -> Optional[dict]:
-    try:
-        api_url = f"https://api.github.com/repos/{repo}/releases/latest"
-        with _urlopen_with_retries(api_url, timeout=15) as resp:
-            return json.loads(resp.read().decode())
-    except _GITHUB_API_ERRORS as exc:
-        _debug_note(f"GitHub release lookup failed for {repo}: {exc}")
-        return None
-
-
-def _pick_release_asset(release: dict, target: str) -> Optional[ImageRef]:
-    version = release.get("tag_name", "")
-    if not version:
-        return None
-
-    assets = release.get("assets", [])
-    exact = f"openmanet-{version}-{target}-squashfs-sysupgrade.img.gz"
-    for asset in assets:
-        if asset.get("name") == exact:
-            sha256 = _sha256_for_release_asset(asset, assets)
-            return ImageRef(version, asset["browser_download_url"], sha256)
-
-    for asset in assets:
-        name = asset.get("name", "")
-        if (
-            target in name
-            and "sysupgrade" in name
-            and name.endswith(".img.gz")
-        ):
-            _debug_note(f"Using release asset: {name}")
-            sha256 = _sha256_for_release_asset(asset, assets)
-            return ImageRef(version, asset["browser_download_url"], sha256)
-
-    return None
-
-
-def _check_github_release(repo: str, target: str) -> Optional[ImageRef]:
-    release = _fetch_github_release(repo)
-    if not release:
-        return None
-    manifest_result = _pick_manifest_release_asset(release, target)
-    if manifest_result:
-        return manifest_result
-    result = _pick_release_asset(release, target)
-    if not result:
-        version = release.get("tag_name", "unknown")
-        _debug_note(
-            f"No matching sysupgrade image for target '{target}' in {repo} release {version}. "
-            f"Expected asset like openmanet-{version}-{target}-squashfs-sysupgrade.img.gz"
-        )
-    return result
-
-
-def _pick_manifest_release_asset(release: dict, target: str) -> Optional[ImageRef]:
-    assets = release.get("assets", [])
-    for asset in assets:
-        if asset.get("name") not in IMAGE_RELEASE_MANIFEST_ASSETS:
-            continue
-        manifest_url = asset.get("browser_download_url")
-        if not manifest_url:
-            continue
-        manifest = _fetch_release_manifest(manifest_url)
-        if not manifest:
-            continue
-        ref = _image_ref_from_release_manifest(
-            manifest,
-            assets,
-            target,
-            release_version=str(release.get("tag_name", "") or ""),
-        )
-        if ref:
-            return ref
-    return None
-
-
-def _fetch_release_manifest(url: str) -> Optional[dict]:
-    try:
-        _validate_download_url(url)
-        with _urlopen_with_retries(url, timeout=30) as resp:
-            return json.loads(resp.read().decode())
-    except _GITHUB_API_ERRORS as exc:
-        _debug_note(f"image release manifest lookup failed for {url}: {exc}")
-        return None
-
-
-def _image_ref_from_release_manifest(
-    manifest: dict,
-    assets: list[dict],
-    target: str,
-    release_version: str = "",
-) -> Optional[ImageRef]:
-    if manifest.get("target") != target:
-        return None
-    artifact = manifest.get("artifact", {})
-    filename = artifact.get("filename", "")
-    sha256 = artifact.get("sha256", "")
-    if not filename or not sha256:
-        return None
-    try:
-        sha256 = normalize_sha256(sha256)
-    except ValueError:
-        return None
-
-    for asset in assets:
-        if asset.get("name") == filename and asset.get("browser_download_url"):
-            version = (
-                release_version
-                or manifest.get("openmanet_version")
-                or manifest.get("channel")
-                or "latest"
-            )
-            return ImageRef(version, asset["browser_download_url"], sha256)
-    return None
-
-
-def normalize_sha256(value: str) -> str:
-    digest = value.strip()
-    if digest.lower().startswith("sha256:"):
-        digest = digest.split(":", 1)[1].strip()
-    if not SHA256_PATTERN.match(digest):
-        raise ValueError("SHA-256 checksum must be 64 hexadecimal characters")
-    return digest.lower()
-
-
-def _sha256_for_release_asset(image_asset: dict, assets: list[dict]) -> Optional[str]:
-    digest = _sha256_from_asset_digest(image_asset.get("digest", ""))
-    if digest:
-        return digest
-
-    image_name = image_asset.get("name", "")
-    if not image_name:
-        return None
-
-    checksum_assets = _candidate_checksum_assets(image_name, assets)
-    for checksum_asset in checksum_assets:
-        checksum_url = checksum_asset.get("browser_download_url")
-        if not checksum_url:
-            continue
-        text = _fetch_checksum_text(checksum_url)
-        if not text:
-            continue
-        digest = _extract_sha256_from_checksum_text(text, image_name)
-        if digest:
-            return digest
-    return None
-
-
-def _sha256_from_asset_digest(value: str) -> Optional[str]:
-    if not value:
-        return None
-    try:
-        return normalize_sha256(value)
-    except ValueError:
-        return None
-
-
-def _candidate_checksum_assets(image_name: str, assets: list[dict]) -> list[dict]:
-    exact_names = {
-        f"{image_name}.sha256",
-        f"{image_name}.sha256sum",
-        f"{image_name}.sha256.txt",
-    }
-    bundle_names = {
-        "SHA256SUMS",
-        "SHA256SUMS.txt",
-        "sha256sums",
-        "sha256sums.txt",
-        "checksums.txt",
-    }
-    exact = []
-    bundled = []
-    for asset in assets:
-        name = asset.get("name", "")
-        if name in exact_names:
-            exact.append(asset)
-        elif name in bundle_names:
-            bundled.append(asset)
-    return exact + bundled
-
-
-def _fetch_checksum_text(url: str) -> str:
-    try:
-        _validate_download_url(url)
-        with _urlopen_with_retries(url, timeout=30) as resp:
-            return resp.read().decode()
-    except _GITHUB_API_ERRORS as exc:
-        _debug_note(f"checksum lookup failed for {url}: {exc}")
-        return ""
-
-
-def _extract_sha256_from_checksum_text(text: str, image_name: str) -> Optional[str]:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if len(lines) == 1:
-        parts = lines[0].split()
-        if len(parts) == 1 and SHA256_PATTERN.match(parts[0]):
-            return normalize_sha256(parts[0])
-
-    for line in lines:
-        parts = line.split()
-        for index, part in enumerate(parts):
-            candidate = part.lstrip("*")
-            if not SHA256_PATTERN.match(candidate):
-                continue
-            filename_tokens = parts[:index] + parts[index + 1:]
-            if any(
-                _checksum_filename_matches(token, image_name)
-                for token in filename_tokens
-            ):
-                return normalize_sha256(candidate)
-    return None
-
-
-def _checksum_filename_matches(token: str, image_name: str) -> bool:
-    filename = token.lstrip("*")
-    return filename == image_name or Path(filename).name == image_name
-
-
-def _url_to_filename(url: str) -> str:
-    parts = url.rstrip("/").split("/")
-    return parts[-1] if parts else "image.img.gz"
-
-
-def _validate_download_url(url: str) -> None:
-    scheme = urlparse(url).scheme.lower()
-    if scheme == "http":
-        raise OSError("Image downloads require HTTPS URLs")
-    if scheme != "https":
-        raise OSError(f"Unsupported image URL scheme: {scheme or '<none>'}")
-
-
-def _urlopen_with_retries(url: str, *, timeout: int):
-    last_error: Optional[BaseException] = None
-    for attempt in range(1, _URL_RETRY_ATTEMPTS + 1):
-        try:
-            return urllib.request.urlopen(url, timeout=timeout)
-        except urllib.error.HTTPError as exc:
-            if exc.code not in _RETRYABLE_HTTP_STATUS_CODES or attempt == _URL_RETRY_ATTEMPTS:
-                raise
-            last_error = exc
-        except _URL_RETRY_ERRORS as exc:
-            if attempt == _URL_RETRY_ATTEMPTS:
-                raise
-            last_error = exc
-        time.sleep(_URL_RETRY_BACKOFF_SECONDS * attempt)
-    assert last_error is not None
-    raise last_error
-
-
-def image_sha256(path: Path) -> str:
-    hasher = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-
-def verify_image_sha256(path: Path, expected_sha256: str) -> None:
-    expected = normalize_sha256(expected_sha256)
-    actual = image_sha256(path)
-    if actual != expected:
-        raise OSError(
-            f"SHA-256 mismatch for {path.name}: expected {expected}, got {actual}"
-        )
+    channel = str(info.get("channel") or "stable")
+    return _check_github_release(github_repo, target, channel=channel)
 
 
 def download_image(
@@ -430,6 +175,8 @@ def download_image(
     sha256: str,
     force: bool = False,
     emit: DownloadEventCallback | None = None,
+    *,
+    trust: dict[str, Any] | None = None,
 ) -> Path:
     _validate_download_url(url)
     expected_sha256 = normalize_sha256(sha256)
@@ -439,7 +186,9 @@ def download_image(
 
     if dest.exists() and not force:
         if _valid_cached_image(dest) and _cached_image_matches_sha256(dest, expected_sha256):
-            _save_version(target, version, sha256=expected_sha256, url=url)
+            verified_trust = _verify_official_image_trust(dest, trust)
+            _save_version(target, version, sha256=expected_sha256, url=url, trust=verified_trust)
+            _prune_verified_cache(target, keep=dest, trust=verified_trust)
             return dest
         dest.unlink()
 
@@ -494,6 +243,7 @@ def download_image(
         if not _valid_image_payload(tmp_path, dest.name):
             raise OSError(f"Downloaded image failed integrity check: {dest.name}")
         verify_image_sha256(tmp_path, expected_sha256)
+        verified_trust = _verify_official_image_trust(tmp_path, trust)
         os.replace(tmp_path, dest)
         tmp_path = None
     except urllib.error.URLError as e:
@@ -504,9 +254,41 @@ def download_image(
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
 
-    _save_version(target, version, sha256=expected_sha256, url=url)
+    _save_version(target, version, sha256=expected_sha256, url=url, trust=verified_trust)
+    _prune_verified_cache(target, keep=dest, trust=verified_trust)
     _emit_event(emit, "download_completed", f"  Saved: {dest}", path=str(dest))
     return dest
+
+
+def _verify_official_image_trust(path: Path, trust: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    if not trust or trust.get("source") != "official":
+        return trust
+    status = trust.get("status")
+    if status == OFFICIAL_TRUST_STATUS:
+        return trust
+    if status != PENDING_TRUST_STATUS:
+        raise OSError("Official image trust metadata is not verification-ready.")
+    repo = str(trust.get("expected_repo") or "")
+    if not repo:
+        raise OSError("Official image trust metadata is missing the expected GitHub repo.")
+    if shutil.which("gh") is None:
+        raise OSError("GitHub CLI is required to verify official EasyMANET image attestations.")
+    command = ["gh", "attestation", "verify", str(path), "--repo", repo]
+    try:
+        subprocess.run(command, check=True, text=True, capture_output=True, timeout=120)
+    except FileNotFoundError as exc:
+        raise OSError("GitHub CLI is required to verify official EasyMANET image attestations.") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise OSError("Timed out verifying official EasyMANET image attestation.") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        message = "Official EasyMANET image attestation verification failed."
+        if detail:
+            message = f"{message} {detail}"
+        raise OSError(message) from exc
+    verified = dict(trust)
+    verified["status"] = OFFICIAL_TRUST_STATUS
+    return verified
 
 
 def get_cached_image(
@@ -530,7 +312,7 @@ def get_cached_image(
                 return cached
             if cached.exists():
                 cached.unlink()
-    cached_images = sorted(cache.glob(f"*{target}*"), key=_cache_mtime, reverse=True)
+    cached_images = sorted(cache.glob(f"*{glob_escape(target)}*"), key=_cache_mtime, reverse=True)
     for path in cached_images:
         if _valid_cached_image(path) and _cached_image_matches_sha256(path, expected_sha256):
             return path
@@ -556,52 +338,56 @@ def _valid_cached_image(path: Path) -> bool:
     return _valid_image_payload(path, path.name)
 
 
-def _valid_image_payload(path: Path, filename: str) -> bool:
-    named_path = Path(filename)
-    suffix = named_path.suffix.lower()
-    if suffix == ".img":
-        try:
-            return path.stat().st_size > 0
-        except OSError:
-            return False
-    if suffix != ".gz" or not named_path.stem.lower().endswith(".img"):
-        return False
-    try:
-        decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
-        total = 0
-        with path.open("rb") as f:
-            while not decompressor.eof:
-                chunk = f.read(1024 * 1024)
-                if not chunk:
-                    break
-                total += len(decompressor.decompress(chunk))
-    except (OSError, zlib.error):
-        return False
-    return decompressor.eof and total > 0
-
-
 def _save_version(
     target: str,
     version: str,
     *,
     sha256: Optional[str] = None,
     url: str = "",
+    trust: dict[str, Any] | None = None,
 ) -> None:
     path = version_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = {}
+    data: dict[str, Any] = {}
     if path.exists():
         try:
-            data = json.loads(path.read_text())
+            loaded = json.loads(path.read_text())
+            if isinstance(loaded, dict):
+                data = loaded
         except (json.JSONDecodeError, OSError):
             pass
-    entry: dict[str, str] = {"version": version}
+    entry: dict[str, Any] = {"version": version}
     if sha256:
         entry["sha256"] = normalize_sha256(sha256)
     if url:
         entry["url"] = url
+    if trust:
+        for key in ("status", "source", "channel", "release_tag", "image_status", "manifest_url", "expected_repo", "attestation_subject_digest"):
+            value = trust.get(key)
+            if isinstance(value, str):
+                entry[f"trust_{key}" if key == "status" else key] = value
+        warnings = trust.get("warnings")
+        if isinstance(warnings, list):
+            entry["warnings"] = [str(item) for item in warnings]
     data[target] = entry
     path.write_text(json.dumps(data, indent=2))
+
+
+def _prune_verified_cache(target: str, *, keep: Path, trust: dict[str, Any] | None = None) -> None:
+    if not trust or trust.get("status") != OFFICIAL_TRUST_STATUS or trust.get("source") != "official":
+        return
+    cache = cache_dir()
+    try:
+        candidates = sorted(cache.glob(f"*{glob_escape(target)}*"), key=_cache_mtime)
+    except OSError:
+        return
+    for path in candidates:
+        if path == keep or not path.is_file() or not path.name.endswith((".img", ".img.gz")):
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 def easymanet_update_repo() -> str:

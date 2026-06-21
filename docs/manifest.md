@@ -179,8 +179,10 @@ nodes:
 ```
 
 With `uplink_interface: wifi`, EasyMANET joins the configured upstream Wi-Fi as
-`wan`. If SSH is enabled at flash time, the node opens SSH on that WAN zone so
-the desktop Mesh tab can discover it on the operator LAN. With
+`wan`. The desktop Mesh and Diagnostics tabs discover nodes through the local
+EasyMANET API (`/v1/identity`, `/v1/neighbors`, `/v1/status`, and gate-only
+`/v1/topology`), so do not enable SSH solely for discovery. Treat any
+WAN-reachable management or API service as trusted-LAN only. With
 `uplink_interface: eth0`, EasyMANET leaves `eth0` on `br-lan` for wired
 management and does not run WAN DHCP on that management bridge.
 
@@ -228,5 +230,7 @@ Priority (highest to lowest):
 - `gateway.uplink_interface: eth0` is reserved for wired management on
   `br-lan`; use a separate uplink or Wi-Fi uplink for WAN routing.
 - `gateway.wifi.enabled` with SSH enabled opens SSH on the WAN firewall zone.
+- Gate topology API exposure on WAN (port 10411) is sensitive on untrusted
+  uplinks.
 - Mesh credentials may be written to `/etc/openmanetd/config.yml` in plaintext
   when that file exists on the image.

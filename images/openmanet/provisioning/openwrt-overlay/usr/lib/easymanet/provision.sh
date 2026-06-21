@@ -42,6 +42,8 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 : "${EM_MESH11SD_MBCA_TBTT_ADJ_INTERVAL_SEC:=60}"
 : "${EM_EASYMANET_API_PORT:=10411}"
 
+EASYMANET_API_CONFIGURED=0
+
 LOG_FILE="$(_prefix_path /var/log/easymanet.log)"
 PROVISIONED_FLAG="$(_prefix_path /etc/easymanet/provisioned)"
 PROVISION_DIR="$(_prefix_path /etc/easymanet)"
@@ -56,167 +58,8 @@ mkdir -p "$(dirname "$LOG_FILE")"
 exec 2>>"$LOG_FILE"
 echo "=== EasyMANET provisioning started $(date) ===" >> "$LOG_FILE"
 
-cleanup() {
-    if [ "$BOOT_MOUNTED_TMP" -eq 1 ]; then
-        umount "$BOOT_MOUNT_TMP" 2>/dev/null || true
-        rmdir "$BOOT_MOUNT_TMP" 2>/dev/null || true
-    fi
-}
-
-trap cleanup EXIT
-
-write_root_shadow_hash() {
-    shadow_path="$1"
-    root_hash="$2"
-    tmp_path="${shadow_path}.easymanet.$$"
-    mode="$(stat -c '%a' "$shadow_path" 2>/dev/null || stat -f '%Lp' "$shadow_path" 2>/dev/null || true)"
-    owner="$(stat -c '%u:%g' "$shadow_path" 2>/dev/null || stat -f '%u:%g' "$shadow_path" 2>/dev/null || true)"
-
-    case "$root_hash" in
-        *[!A-Za-z0-9./$=]*)
-            echo "Invalid root password hash characters" >> "$LOG_FILE"
-            return 1
-            ;;
-    esac
-
-    old_umask="$(umask)"
-    umask 077
-    if ! : > "$tmp_path"; then
-        umask "$old_umask"
-        return 1
-    fi
-    umask "$old_umask"
-    chmod 0600 "$tmp_path" 2>/dev/null || {
-        rm -f "$tmp_path"
-        return 1
-    }
-
-    EASYMANET_ROOT_HASH="$root_hash"
-    export EASYMANET_ROOT_HASH
-    if ! awk '
-        BEGIN {
-            hash = ENVIRON["EASYMANET_ROOT_HASH"]
-            replaced = 0
-        }
-        /^root:/ {
-            printf "root:%s:19000:0:99999:7:::\n", hash
-            replaced = 1
-            next
-        }
-        { print }
-        END {
-            if (!replaced) {
-                printf "root:%s:19000:0:99999:7:::\n", hash
-            }
-        }
-    ' "$shadow_path" > "$tmp_path"; then
-        unset EASYMANET_ROOT_HASH
-        rm -f "$tmp_path"
-        return 1
-    fi
-    unset EASYMANET_ROOT_HASH
-
-    if [ -n "$mode" ]; then
-        chmod "$mode" "$tmp_path" 2>/dev/null || true
-    else
-        chmod 0600 "$tmp_path" 2>/dev/null || true
-    fi
-    if [ -n "$owner" ]; then
-        chown "$owner" "$tmp_path" 2>/dev/null || true
-    fi
-    mv "$tmp_path" "$shadow_path"
-}
-
-wipe_boot_provision_json() {
-    for candidate in \
-        "$BOOT_JSON" \
-        "$(_prefix_path /boot/easymanet/provision.json)" \
-        "$(_prefix_path /boot/firmware/easymanet/provision.json)"
-    do
-        if [ -f "$candidate" ]; then
-            rm -f "$candidate"
-            echo "Removed boot payload: $candidate" >> "$LOG_FILE"
-        fi
-    done
-}
-
-uci_set() {
-    uci set "$@" >> "$LOG_FILE" 2>&1
-}
-
-uci_commit() {
-    uci commit "$1" >> "$LOG_FILE" 2>&1
-}
-
-uci_add_list() {
-    uci add_list "$@" >> "$LOG_FILE" 2>&1
-}
-
-configure_mesh_radio_device() {
-    radio="$1"
-    uci_set wireless."$radio".channel="$MESH_CHANNEL"
-    uci_set wireless."$radio".s1g_chanbw="$MESH_BW"
-    uci -q delete wireless."$radio".htmode 2>/dev/null || true
-    uci_set wireless."$radio".country="$MESH_COUNTRY"
-    uci_set wireless."$radio".bcf="$EM_MESH_BCF"
-    uci_set wireless."$radio".disabled="0"
-}
-
-configure_easymanet_api() {
-    api_home="$(_prefix_path /www/easymanet-api)"
-    if [ ! -x "$api_home/v1/identity" ] || [ ! -x "$api_home/v1/topology" ]; then
-        echo "WARNING: EasyMANET API endpoint wrappers are missing; skipping API setup" >> "$LOG_FILE"
-        return 0
-    fi
-
-    echo "Configuring EasyMANET topology API on port $EM_EASYMANET_API_PORT..." >> "$LOG_FILE"
-    uci -q delete uhttpd.easymanet_api 2>/dev/null || true
-    uci_set uhttpd.easymanet_api=uhttpd
-    uci_set uhttpd.easymanet_api.home="$api_home"
-    uci_set uhttpd.easymanet_api.cgi_prefix="/v1"
-    uci_set uhttpd.easymanet_api.script_timeout="10"
-    uci_set uhttpd.easymanet_api.network_timeout="10"
-    uci_set uhttpd.easymanet_api.http_keepalive="0"
-    uci_set uhttpd.easymanet_api.tcp_keepalive="1"
-    if [ "$NODE_ROLE" = "gate" ]; then
-        uci_add_list uhttpd.easymanet_api.listen_http="0.0.0.0:$EM_EASYMANET_API_PORT"
-    else
-        uci_add_list uhttpd.easymanet_api.listen_http="$NODE_IP:$EM_EASYMANET_API_PORT"
-    fi
-    uci_commit uhttpd
-}
-
-find_boot_json() {
-    for candidate in \
-        "$(_prefix_path /boot/easymanet/provision.json)" \
-        "$(_prefix_path /boot/firmware/easymanet/provision.json)"
-    do
-        if [ -s "$candidate" ]; then
-            BOOT_JSON="$candidate"
-            return 0
-        fi
-    done
-
-    if [ -n "$EASYMANET_PREFIX" ]; then
-        return 1
-    fi
-
-    mkdir -p "$BOOT_MOUNT_TMP"
-    for dev in /dev/mmcblk0p1 /dev/sda1 /dev/nvme0n1p1; do
-        [ -b "$dev" ] || continue
-        if mount -t vfat "$dev" "$BOOT_MOUNT_TMP" 2>/dev/null; then
-            BOOT_MOUNTED_TMP=1
-            if [ -s "$BOOT_MOUNT_TMP/easymanet/provision.json" ]; then
-                BOOT_JSON="$BOOT_MOUNT_TMP/easymanet/provision.json"
-                return 0
-            fi
-            umount "$BOOT_MOUNT_TMP" 2>/dev/null || true
-            BOOT_MOUNTED_TMP=0
-        fi
-    done
-
-    return 1
-}
+# shellcheck source=provision-runtime.sh
+. "$SCRIPT_DIR/provision-runtime.sh"
 
 if [ -f "$PROVISIONED_FLAG" ]; then
     echo "Already provisioned, skipping." >> "$LOG_FILE"
@@ -258,7 +101,7 @@ missing_fields=""
 [ -n "$HOSTNAME" ] || missing_fields="$missing_fields node.hostname"
 [ -n "$NODE_ROLE" ] || missing_fields="$missing_fields node.role"
 [ -n "$NODE_IP" ] || missing_fields="$missing_fields node.ip"
-[ -n "$NODE_TARGET" ] || NODE_TARGET="rpi4-mm6108-spi"
+[ -n "$NODE_TARGET" ] || missing_fields="$missing_fields node.target"
 if [ -n "$missing_fields" ]; then
     echo "FATAL: missing required provision.json fields:$missing_fields" | tee -a "$LOG_FILE"
     exit 1
@@ -271,6 +114,13 @@ case "$NODE_ROLE" in
     gate|point) ;;
     *)
         echo "FATAL: unsupported node.role in provision.json: $NODE_ROLE" | tee -a "$LOG_FILE"
+        exit 1
+        ;;
+esac
+case "$NODE_TARGET" in
+    rpi4-mm6108-spi) ;;
+    *)
+        echo "FATAL: unsupported node.target in provision.json: $NODE_TARGET" | tee -a "$LOG_FILE"
         exit 1
         ;;
 esac
@@ -289,7 +139,7 @@ case "$MESH_CHANNEL" in
 esac
 if [ "$NODE_TARGET" = "rpi4-mm6108-spi" ] && [ "$MESH_COUNTRY" = "US" ]; then
     case "${MESH_CHANNEL}:${MESH_BW}" in
-        0:2|42:2) ;;
+        42:2) ;;
         *)
             echo "FATAL: rpi4-mm6108-spi in US requires mesh.channel 42 and mesh.bandwidth_mhz 2; got channel $MESH_CHANNEL bandwidth $MESH_BW" | tee -a "$LOG_FILE"
             exit 1
@@ -478,13 +328,6 @@ if [ "$NODE_ROLE" = "gate" ]; then
     uci_set firewall.mesh_wan_forwarding=forwarding
     uci_set firewall.mesh_wan_forwarding.src="mesh"
     uci_set firewall.mesh_wan_forwarding.dest="wan"
-
-    uci_set firewall.allow_easymanet_api_wan=rule
-    uci_set firewall.allow_easymanet_api_wan.name="Allow-EasyMANET-API-WAN"
-    uci_set firewall.allow_easymanet_api_wan.src="wan"
-    uci_set firewall.allow_easymanet_api_wan.proto="tcp"
-    uci_set firewall.allow_easymanet_api_wan.dest_port="$EM_EASYMANET_API_PORT"
-    uci_set firewall.allow_easymanet_api_wan.target="ACCEPT"
 fi
 uci_commit firewall
 
@@ -570,15 +413,6 @@ if [ -x "$dropbear_init" ]; then
     fi
 fi
 
-uhttpd_init="$(_prefix_path /etc/init.d/uhttpd)"
-if [ -x "$uhttpd_init" ]; then
-    echo "Enabling EasyMANET topology API (uhttpd)..." >> "$LOG_FILE"
-    "$uhttpd_init" enable 2>/dev/null || true
-    "$uhttpd_init" restart 2>/dev/null || "$uhttpd_init" start 2>/dev/null || true
-else
-    echo "WARNING: uhttpd init script not found; EasyMANET topology API will not start" >> "$LOG_FILE"
-fi
-
 openmanetd_config="$(_prefix_path /etc/openmanetd/config.yml)"
 if [ -f "$openmanetd_config" ]; then
     cat > "$openmanetd_config" <<EOF
@@ -602,6 +436,16 @@ if [ -x "$network_init" ]; then
     "$network_init" enable 2>/dev/null || true
     "$network_init" restart 2>/dev/null || true
 fi
+if [ "$EASYMANET_API_CONFIGURED" = "1" ]; then
+    uhttpd_init="$(_prefix_path /etc/init.d/uhttpd)"
+    if [ -x "$uhttpd_init" ]; then
+        echo "Enabling EasyMANET topology API (uhttpd)..." >> "$LOG_FILE"
+        "$uhttpd_init" enable 2>/dev/null || true
+        "$uhttpd_init" restart 2>/dev/null || "$uhttpd_init" start 2>/dev/null || true
+    else
+        echo "WARNING: uhttpd init script not found; EasyMANET topology API will not start" >> "$LOG_FILE"
+    fi
+fi
 echo "Reapplying Morse mesh wireless settings after network restart..." >> "$LOG_FILE"
 configure_mesh_radio_device "$MESH_RADIO"
 uci_commit wireless
@@ -624,6 +468,15 @@ if [ -x "$led_status_init" ]; then
     "$led_status_init" restart 2>/dev/null || "$led_status_init" start 2>/dev/null || true
 else
     echo "WARNING: EasyMANET LED status init script not found; LED status will not start" >> "$LOG_FILE"
+fi
+
+display_status_init="$(_prefix_path /etc/init.d/easymanet-display-status)"
+if [ -x "$display_status_init" ]; then
+    echo "Enabling EasyMANET HDMI status display..." >> "$LOG_FILE"
+    "$display_status_init" enable 2>/dev/null || true
+    "$display_status_init" restart 2>/dev/null || "$display_status_init" start 2>/dev/null || true
+else
+    echo "WARNING: EasyMANET display status init script not found; HDMI status will not start" >> "$LOG_FILE"
 fi
 
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)" > "$PROVISIONED_FLAG"

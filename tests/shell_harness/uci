@@ -107,6 +107,9 @@ case "$1" in
         esac
         ;;
     commit)
+        if [ -n "${UCI_COMMIT_LOG:-}" ]; then
+            printf '%s\n' "${2:-}" >> "$UCI_COMMIT_LOG"
+        fi
         ;;
     add)
         shift

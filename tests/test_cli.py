@@ -1,5 +1,6 @@
 """Tests for CLI helpers."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +15,7 @@ from easymanet_cli.flash import (
     resolve_base_image,
     resolve_flash_ssh_enabled,
 )
-from easymanet_image import cli as cli_image
+from easymanet_cli import image as cli_image
 
 
 FIELD_FLEET_YAML = """\
@@ -161,6 +162,111 @@ def test_image_set_url_requires_sha256():
 
     assert result.exit_code == 1
     assert "--set-url requires --set-sha256" in result.output
+
+
+def test_diagnostics_run_command_prints_summary(monkeypatch):
+    from typer.testing import CliRunner
+    import easymanet_cli.app as cli_app
+
+    def fake_run_diagnostics(config=""):
+        del config
+        return {"ok": True, "summary": "EasyMANET Diagnostics\nSupport code: EM-OK\n"}
+
+    monkeypatch.setattr(cli_app, "run_diagnostics", fake_run_diagnostics)
+
+    result = CliRunner().invoke(cli_app.app, ["diagnostics", "run", "--config", "field"])
+
+    assert result.exit_code == 0
+    assert "Support code: EM-OK" in result.output
+
+
+def test_diagnostics_run_command_exits_nonzero_on_failure(monkeypatch):
+    from typer.testing import CliRunner
+    import easymanet_cli.app as cli_app
+
+    def fake_run_diagnostics(config=""):
+        del config
+        return {
+            "ok": False,
+            "summary": "EasyMANET Diagnostics\nSupport code: EM-API-DOWN\n",
+            "errors": ["node API unavailable"],
+        }
+
+    monkeypatch.setattr(cli_app, "run_diagnostics", fake_run_diagnostics)
+
+    result = CliRunner().invoke(cli_app.app, ["diagnostics", "run", "--config", "field"])
+
+    assert result.exit_code == 1
+    assert "EM-API-DOWN" in result.output
+    assert "node API unavailable" in result.output
+
+
+def test_diagnostics_bundle_command_prints_bundle_path(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+    import easymanet_cli.app as cli_app
+
+    def fake_export_support_bundle(config=""):
+        del config
+        return {
+            "ok": True,
+            "summary": "EasyMANET Diagnostics\n",
+            "bundle_path": str(tmp_path / "EasyMANET" / "Diagnostics" / "support.zip"),
+        }
+
+    monkeypatch.setattr(cli_app, "export_support_bundle", fake_export_support_bundle)
+
+    result = CliRunner().invoke(cli_app.app, ["diagnostics", "bundle", "--config", "field"])
+
+    assert result.exit_code == 0
+    assert str(Path(tmp_path / "EasyMANET" / "Diagnostics" / "support.zip")) in result.output
+
+
+def test_diagnostics_bundle_command_exits_nonzero_on_failure(monkeypatch):
+    from typer.testing import CliRunner
+    import easymanet_cli.app as cli_app
+
+    def fake_export_support_bundle(config=""):
+        del config
+        return {"ok": False, "summary": "EasyMANET Diagnostics\n", "errors": ["bundle failed"]}
+
+    monkeypatch.setattr(cli_app, "export_support_bundle", fake_export_support_bundle)
+
+    result = CliRunner().invoke(cli_app.app, ["diagnostics", "bundle", "--config", "field"])
+
+    assert result.exit_code == 1
+    assert "bundle failed" in result.output
+
+
+def test_diagnostics_import_boot_report_command_prints_imported_paths(monkeypatch):
+    from typer.testing import CliRunner
+    import easymanet_cli.app as cli_app
+
+    def fake_import_boot_report(source):
+        return {"ok": True, "target": "/workspace/Diagnostics/imported", "imported": [source]}
+
+    monkeypatch.setattr(cli_app, "import_boot_report", fake_import_boot_report)
+
+    result = CliRunner().invoke(cli_app.app, ["diagnostics", "import-boot-report", "--source", "/Volumes/boot"])
+
+    assert result.exit_code == 0
+    assert "/workspace/Diagnostics/imported" in result.output
+    assert "/Volumes/boot" in result.output
+
+
+def test_diagnostics_import_boot_report_command_exits_nonzero_on_failure(monkeypatch):
+    from typer.testing import CliRunner
+    import easymanet_cli.app as cli_app
+
+    def fake_import_boot_report(source):
+        del source
+        return {"ok": False, "errors": ["no boot reports found"]}
+
+    monkeypatch.setattr(cli_app, "import_boot_report", fake_import_boot_report)
+
+    result = CliRunner().invoke(cli_app.app, ["diagnostics", "import-boot-report", "--source", "/Volumes/boot"])
+
+    assert result.exit_code == 1
+    assert "no boot reports found" in result.output
 
 
 def test_flash_base_image_rejects_malformed_sha256(tmp_path, capsys):
@@ -376,7 +482,7 @@ def test_flash_exits_when_finish_flash_reports_eject_failure(tmp_path, monkeypat
 def test_image_build_chains_build_error(monkeypatch):
     from typer.testing import CliRunner
 
-    from easymanet_image import cli as cli_image
+    from easymanet_cli import image as cli_image
     from easymanet_image.build import BuildError
     from easymanet_cli.app import app
 
@@ -391,3 +497,18 @@ def test_image_build_chains_build_error(monkeypatch):
 
     assert result.exit_code == 1
     assert "Build error: docker is missing" in result.output
+
+
+def test_image_cli_compatibility_shim_exposes_register_command():
+    import easymanet_image.cli as shim
+    from easymanet_image.cli import register_image_commands as shim_register
+    from easymanet_cli.image import register_image_commands
+
+    assert shim_register is register_image_commands
+    for name in (
+        "maybe_show_update_notice",
+        "get_image_config",
+        "get_cached_image",
+        "build_image",
+    ):
+        assert hasattr(shim, name)

@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 import tempfile
 
 import pytest
@@ -226,8 +227,52 @@ nodes:
     os.unlink(path)
 
 
+def test_render_does_not_inherit_gateway_wifi_defaults_for_disabled_gateways():
+    config = """
+version: 1
+mesh:
+  id: test
+  password: "pw"
+  channel: 42
+  bandwidth_mhz: 2
+  country: US
+defaults:
+  target: rpi4-mm6108-spi
+  gateway:
+    wifi:
+      enabled: true
+      ssid: operator-uplink
+      password: operator-password
+  management:
+    root_password_hash: ""
+    ssh_authorized_keys: []
+nodes:
+  n1:
+    role: point
+    hostname: n1
+    ip: 10.41.2.1
+  n2:
+    role: gate
+    hostname: n2
+    ip: 10.41.3.1
+    gateway:
+      enabled: false
+"""
+    path = _write_config(config)
+    m = load_manifest(path)
+    for node_name in ("n1", "n2"):
+        payload = resolve_provision(m, node_name)
+        data = render_dict(m, node_name)
+
+        assert payload.node.gateway.enabled is False
+        assert payload.node.gateway.wifi is None
+        assert "wifi" not in data["node"]["gateway"]
+    os.unlink(path)
+
+
 def test_render_starter_gate_uses_wifi_uplink_shape():
-    m = load_manifest("examples/three-node-field-mesh.yml")
+    root = Path(__file__).resolve().parents[1]
+    m = load_manifest(str(root / "examples" / "three-node-field-mesh.yml"))
     gate = render_dict(m, "gate01", ssh_enabled=True)
 
     assert gate["node"]["gateway"]["enabled"] is True

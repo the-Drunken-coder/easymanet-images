@@ -92,7 +92,7 @@ set_led() {
 
 has_internet() {
     for target in $EASYMANET_LED_TARGETS; do
-        if ping -c 1 -W "$EASYMANET_LED_PING_TIMEOUT" "$target" >/dev/null 2>&1; then
+        if ping -c 1 -w "$EASYMANET_LED_PING_TIMEOUT" "$target" >/dev/null 2>&1; then
             return 0
         fi
     done
@@ -118,6 +118,12 @@ if [ -z "$LED_PATH" ]; then
     else
         log "no green/ACT LED candidate found under $LED_ROOT"
     fi
+    if [ "$MODE" = "once" ]; then
+        exit 0
+    fi
+    while true; do
+        sleep "$EASYMANET_LED_INTERVAL"
+    done
     exit 0
 fi
 

@@ -22,6 +22,7 @@ defaults:
   gateway:
     wifi:
       enabled: false
+      # Replace these placeholder credentials before enabling WiFi uplink.
       ssid: "replace-with-operator-wifi"
       password: "replace-with-operator-wifi-password"
       encryption: psk2

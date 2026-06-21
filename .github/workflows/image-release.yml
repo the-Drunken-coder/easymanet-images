@@ -19,6 +19,10 @@ on:
         description: Firmware target suffix
         required: false
         default: "rpi4-mm6108-spi"
+      channel:
+        description: "Release channel: stable or candidate. Leave blank to derive from release_tag."
+        required: false
+        default: ""
       jobs:
         description: Parallel OpenWrt make jobs inside Docker
         required: false
@@ -43,6 +47,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: image-release-${{ github.ref }}
@@ -127,6 +133,35 @@ jobs:
           fi
           easymanet "${args[@]}"
 
+      - name: Resolve release channel
+        id: release_channel
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          channel="$INPUT_CHANNEL"
+          if [ -z "$channel" ]; then
+            case "$RELEASE_TAG" in
+              images-v*-candidate.*) channel="candidate" ;;
+              images-v*) channel="stable" ;;
+              "") channel="candidate" ;;
+              *) echo "release_tag must look like images-vX.Y.Z or images-vX.Y.Z-candidate.N"; exit 1 ;;
+            esac
+          fi
+          case "$channel" in stable|candidate) ;; *) echo "channel must be stable or candidate"; exit 1 ;; esac
+          if [ -n "$RELEASE_TAG" ]; then
+            if [ "$channel" = "stable" ] && ! printf '%s\n' "$RELEASE_TAG" | grep -Eq '^images-v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "stable image release tags must look like images-vX.Y.Z"
+              exit 1
+            fi
+            if [ "$channel" = "candidate" ] && ! printf '%s\n' "$RELEASE_TAG" | grep -Eq '^images-v[0-9]+\.[0-9]+\.[0-9]+-candidate\.[0-9]+$'; then
+              echo "candidate image release tags must look like images-vX.Y.Z-candidate.N"
+              exit 1
+            fi
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
       - name: Save OpenMANET build cache
         if: steps.build_image.outcome == 'success' && steps.openmanet-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae
@@ -140,16 +175,16 @@ jobs:
           OPENMANET_VERSION: ${{ inputs.openmanet_version }}
           BOARD: ${{ inputs.board }}
           TARGET: ${{ inputs.target }}
+          CHANNEL: ${{ steps.release_channel.outputs.channel }}
           SOURCE_REPO: ${{ inputs.source_repo }}
           SOURCE_REF: ${{ inputs.source_ref }}
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           python - <<'PY'
-          import datetime as dt
           import hashlib
-          import json
           import os
           from pathlib import Path
+          from easymanet_image.release import IMAGE_RELEASE_MANIFEST, write_release_manifest
 
           dist = Path("dist")
           artifacts = []
@@ -157,28 +192,72 @@ jobs:
               digest = hashlib.sha256(path.read_bytes()).hexdigest()
               sha_path = path.with_suffix(path.suffix + ".sha256")
               sha_path.write_text(f"{digest}  {path.name}\n")
-              artifacts.append({"name": path.name, "sha256": digest, "bytes": path.stat().st_size})
+              artifacts.append(path)
 
           if not artifacts:
               raise SystemExit("No firmware artifacts (*.img.gz) were produced")
 
-          manifest = {
-              "schema_version": 1,
-              "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-              "release_tag": os.environ["RELEASE_TAG"],
-              "openmanet_version": os.environ["OPENMANET_VERSION"],
-              "board": os.environ["BOARD"],
-              "target": os.environ["TARGET"],
-              "source_repo": os.environ["SOURCE_REPO"],
-              "source_ref": os.environ["SOURCE_REF"],
-              "source_sha": os.environ["SOURCE_SHA"],
-              "public_repo": os.environ["GITHUB_REPOSITORY"],
-              "public_sha": os.environ["GITHUB_SHA"],
-              "run_id": os.environ["GITHUB_RUN_ID"],
-              "artifacts": artifacts,
-          }
-          (dist / "easymanet-image-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          artifact = artifacts[0]
+          write_release_manifest(
+              artifact=artifact,
+              output_dir=dist,
+              target=os.environ["TARGET"],
+              openmanet_version=os.environ["OPENMANET_VERSION"],
+              board=os.environ["BOARD"],
+              channel=os.environ["CHANNEL"],
+              release_tag=os.environ["RELEASE_TAG"],
+              source_repo=os.environ["SOURCE_REPO"],
+              source_ref=os.environ["SOURCE_REF"],
+              source_sha=os.environ["SOURCE_SHA"],
+              public_repo=os.environ["GITHUB_REPOSITORY"],
+              public_repo_commit=os.environ["GITHUB_SHA"],
+              workflow_name=os.environ["GITHUB_WORKFLOW"],
+              run_id=os.environ["GITHUB_RUN_ID"],
+              signature_assets=[f"{artifact.name}.sha256", f"{IMAGE_RELEASE_MANIFEST}.sigstore.json"],
+          )
           PY
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45
+        with:
+          subject-path: |
+            dist/*.img.gz
+            dist/*.sha256
+            dist/easymanet-image-release.json
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9
+
+      - name: Sign release manifest
+        run: |
+          cosign sign-blob --yes --bundle dist/easymanet-image-release.json.sigstore.json dist/easymanet-image-release.json
+
+      - name: Generate release notes
+        if: inputs.release_tag != ''
+        continue-on-error: true
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_RELEASE_NOTES_MODEL: ${{ vars.OPENAI_RELEASE_NOTES_MODEL || 'gpt-5.4-mini' }}
+          IMAGE_MANIFEST: dist/easymanet-image-release.json
+          RELEASE_NOTES: dist/release-notes.md
+        run: |
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "OPENAI_API_KEY is not configured; fallback release notes will be used."
+            exit 0
+          fi
+          python tools/packaging/generate_image_release_notes.py
+
+      - name: Fallback release notes
+        if: inputs.release_tag != ''
+        run: |
+          if [ ! -s dist/release-notes.md ]; then
+            {
+              printf '%s\n' '## User Summary'
+              printf '%s\n\n' 'EasyMANET firmware image release.'
+              printf '%s\n' '## Technical Appendix'
+              printf '%s\n' 'See easymanet-image-release.json and attached checksums/signatures.'
+            } > dist/release-notes.md
+          fi
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -187,7 +266,9 @@ jobs:
           path: |
             dist/*.img.gz
             dist/*.sha256
-            dist/easymanet-image-manifest.json
+            dist/easymanet-image-release.json
+            dist/easymanet-image-release.json.sigstore.json
+            dist/release-notes.md
           retention-days: 14
           if-no-files-found: error
 
@@ -201,12 +282,19 @@ jobs:
           SOURCE_REPO: ${{ inputs.source_repo }}
           SOURCE_REF: ${{ inputs.source_ref }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          CHANNEL: ${{ steps.release_channel.outputs.channel }}
         run: |
           set -euo pipefail
-          notes="$(mktemp)"
-          {
-            echo "EasyMANET image release for OpenMANET ${OPENMANET_VERSION} (${TARGET})."
-            echo
-            echo "Generated from ${SOURCE_REPO}@${SOURCE_REF} (${SOURCE_SHA})."
-          } > "$notes"
-          gh release create "$RELEASE_TAG" dist/*             --repo "$GITHUB_REPOSITORY"             --title "$RELEASE_TAG"             --notes-file "$notes"
+          args=(release create "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TAG" --notes-file dist/release-notes.md)
+          if [ "$CHANNEL" = "candidate" ]; then
+            args+=(--prerelease)
+          fi
+          gh "${args[@]}"
+
+      - name: Clean up old image releases
+        if: inputs.release_tag != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/packaging/cleanup_image_releases.py --repo "$GITHUB_REPOSITORY" --just-published "${{ inputs.release_tag }}"

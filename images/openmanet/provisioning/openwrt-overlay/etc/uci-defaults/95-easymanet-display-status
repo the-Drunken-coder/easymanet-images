@@ -1,0 +1,8 @@
+#!/bin/sh
+# Enable the EasyMANET HDMI/console status display service.
+
+if [ -x /etc/init.d/easymanet-display-status ]; then
+    /etc/init.d/easymanet-display-status enable 2>/dev/null || true
+fi
+
+exit 0

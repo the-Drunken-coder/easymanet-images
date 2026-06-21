@@ -4,12 +4,14 @@ import gzip
 import hashlib
 import io
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from easymanet import download
+from easymanet.release_trust import OFFICIAL_TRUST_STATUS, PENDING_TRUST_STATUS
 
 
 def _write_gzip(path, payload=b"image-bytes", corrupt=False, trailing=b""):
@@ -143,8 +145,8 @@ def test_get_cached_image_requires_checksum(image_cache):
 def test_check_latest_version_defaults_to_easymanet_images_repo(image_cache, monkeypatch):
     repos = []
 
-    def fake_check(repo, target):
-        repos.append((repo, target))
+    def fake_check(repo, target, *, channel="stable"):
+        repos.append((repo, target, channel))
         return download.ImageRef("1.6.5", "https://example.invalid/image.img.gz", "a" * 64)
 
     monkeypatch.setattr(download, "_check_github_release", fake_check)
@@ -152,7 +154,26 @@ def test_check_latest_version_defaults_to_easymanet_images_repo(image_cache, mon
     ref = download.check_latest_version("rpi4-mm6108-spi")
 
     assert ref is not None
-    assert repos == [(download.DEFAULT_IMAGE_GITHUB_REPO, "rpi4-mm6108-spi")]
+    assert repos == [(download.DEFAULT_IMAGE_GITHUB_REPO, "rpi4-mm6108-spi", "stable")]
+
+
+def test_check_latest_version_uses_configured_candidate_channel(image_cache, monkeypatch):
+    image_cache.manifest.write_text(json.dumps({
+        "rpi4-mm6108-spi": {
+            "github": "owner/repo",
+            "channel": "candidate",
+        }
+    }))
+    calls = []
+
+    def fake_check(repo, target, *, channel="stable"):
+        calls.append((repo, target, channel))
+        return download.ImageRef("images-v0.3.0-candidate.1", "https://example.invalid/image.img.gz", "a" * 64)
+
+    monkeypatch.setattr(download, "_check_github_release", fake_check)
+
+    assert download.check_latest_version("rpi4-mm6108-spi") is not None
+    assert calls == [("owner/repo", "rpi4-mm6108-spi", "candidate")]
 
 
 def test_get_cached_image_rejects_checksum_mismatch(image_cache):
@@ -239,6 +260,85 @@ def test_download_image_verifies_sha256(tmp_path, monkeypatch):
     }
 
 
+def test_download_image_verifies_official_attestation_before_caching(tmp_path, monkeypatch):
+    payload = b"firmware-bytes"
+    compressed = io.BytesIO()
+    with gzip.GzipFile(fileobj=compressed, mode="wb") as f:
+        f.write(payload)
+    body = compressed.getvalue()
+    expected = hashlib.sha256(body).hexdigest()
+    calls = []
+
+    monkeypatch.setattr(download, "cache_dir", lambda: tmp_path / "images")
+    monkeypatch.setattr(download, "version_file_path", lambda: tmp_path / "version.json")
+    monkeypatch.setattr(download.urllib.request, "urlopen", lambda *_a, **_k: BytesResponse(body))
+    monkeypatch.setattr(download.shutil, "which", lambda command: "/usr/bin/gh" if command == "gh" else None)
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(download.subprocess, "run", fake_run)
+
+    path = download.download_image(
+        "rpi4-mm6108-spi",
+        "images-v0.2.0",
+        "https://example.invalid/openmanet-test-rpi4-mm6108-spi.img.gz",
+        expected,
+        trust={
+            "status": PENDING_TRUST_STATUS,
+            "source": "official",
+            "expected_repo": "owner/repo",
+            "attestation_subject_digest": f"sha256:{expected}",
+        },
+    )
+
+    assert path.exists()
+    assert calls[0][0][:3] == ["gh", "attestation", "verify"]
+    assert calls[0][0][3].startswith(str(path.parent / f".{path.name}."))
+    assert calls[0][0][3].endswith(".part")
+    assert calls[0][0][-2:] == ["--repo", "owner/repo"]
+    version_data = json.loads((tmp_path / "version.json").read_text())
+    assert version_data["rpi4-mm6108-spi"]["trust_status"] == OFFICIAL_TRUST_STATUS
+
+
+def test_download_image_removes_partial_file_when_official_attestation_fails(tmp_path, monkeypatch):
+    payload = b"firmware-bytes"
+    compressed = io.BytesIO()
+    with gzip.GzipFile(fileobj=compressed, mode="wb") as f:
+        f.write(payload)
+    body = compressed.getvalue()
+    expected = hashlib.sha256(body).hexdigest()
+
+    monkeypatch.setattr(download, "cache_dir", lambda: tmp_path / "images")
+    monkeypatch.setattr(download, "version_file_path", lambda: tmp_path / "version.json")
+    monkeypatch.setattr(download.urllib.request, "urlopen", lambda *_a, **_k: BytesResponse(body))
+    monkeypatch.setattr(download.shutil, "which", lambda command: "/usr/bin/gh" if command == "gh" else None)
+
+    def fake_run(command, **kwargs):
+        raise subprocess.CalledProcessError(1, command, stderr="no matching attestations")
+
+    monkeypatch.setattr(download.subprocess, "run", fake_run)
+
+    with pytest.raises(OSError, match="attestation verification failed"):
+        download.download_image(
+            "rpi4-mm6108-spi",
+            "images-v0.2.0",
+            "https://example.invalid/openmanet-test-rpi4-mm6108-spi.img.gz",
+            expected,
+            trust={
+                "status": PENDING_TRUST_STATUS,
+                "source": "official",
+                "expected_repo": "owner/repo",
+                "attestation_subject_digest": f"sha256:{expected}",
+            },
+        )
+
+    cached = tmp_path / "images" / "openmanet-test-rpi4-mm6108-spi.img.gz"
+    assert not cached.exists()
+    assert not list((tmp_path / "images").glob("*.part"))
+
+
 def test_download_image_records_metadata_when_reusing_existing_cache(tmp_path, monkeypatch):
     cache = tmp_path / "images"
     cache.mkdir()
@@ -267,6 +367,91 @@ def test_download_image_records_metadata_when_reusing_existing_cache(tmp_path, m
         "version": "test-cache",
         "sha256": expected,
         "url": "https://example.invalid/openmanet-test-rpi4-mm6108-spi.img.gz",
+    }
+
+
+def test_download_image_verifies_official_attestation_before_reusing_cache(tmp_path, monkeypatch):
+    cache = tmp_path / "images"
+    cache.mkdir()
+    image = cache / "openmanet-test-rpi4-mm6108-spi.img.gz"
+    _write_gzip(image)
+    expected = _sha256(image)
+    calls = []
+
+    monkeypatch.setattr(download, "cache_dir", lambda: cache)
+    monkeypatch.setattr(download, "version_file_path", lambda: tmp_path / "version.json")
+    monkeypatch.setattr(download.shutil, "which", lambda command: "/usr/bin/gh" if command == "gh" else None)
+    monkeypatch.setattr(download.urllib.request, "urlopen", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("cache reuse should avoid network")))
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(download.subprocess, "run", fake_run)
+
+    path = download.download_image(
+        "rpi4-mm6108-spi",
+        "test-cache",
+        "https://example.invalid/openmanet-test-rpi4-mm6108-spi.img.gz",
+        expected,
+        trust={
+            "status": PENDING_TRUST_STATUS,
+            "source": "official",
+            "expected_repo": "owner/repo",
+            "attestation_subject_digest": f"sha256:{expected}",
+        },
+    )
+
+    assert path == image
+    assert calls[0][0] == ["gh", "attestation", "verify", str(image), "--repo", "owner/repo"]
+
+
+def test_prune_verified_cache_treats_target_as_literal_glob(tmp_path, monkeypatch):
+    cache = tmp_path / "images"
+    cache.mkdir()
+    keep = cache / "openmanet-new-target[1].img.gz"
+    old = cache / "openmanet-old-target[1].img.gz"
+    unrelated = cache / "openmanet-old-target1.img.gz"
+    for path in (keep, old, unrelated):
+        _write_gzip(path)
+
+    monkeypatch.setattr(download, "cache_dir", lambda: cache)
+
+    download._prune_verified_cache(
+        "target[1]",
+        keep=keep,
+        trust={"status": OFFICIAL_TRUST_STATUS, "source": "official"},
+    )
+
+    assert keep.exists()
+    assert not old.exists()
+    assert unrelated.exists()
+
+
+def test_get_cached_image_treats_target_as_literal_glob(tmp_path, monkeypatch):
+    cache = tmp_path / "images"
+    cache.mkdir()
+    literal = cache / "openmanet-target[1].img.gz"
+    glob_match = cache / "openmanet-target1.img.gz"
+    _write_gzip(literal, payload=b"literal")
+    _write_gzip(glob_match, payload=b"glob")
+    expected = _sha256(literal)
+
+    monkeypatch.setattr(download, "cache_dir", lambda: cache)
+    monkeypatch.setattr(download, "get_image_config", lambda _target: None)
+
+    assert download.get_cached_image("target[1]", sha256=expected) == literal
+
+
+def test_save_version_recovers_from_non_object_version_file(tmp_path, monkeypatch):
+    version_file = tmp_path / "version.json"
+    version_file.write_text("[]")
+    monkeypatch.setattr(download, "version_file_path", lambda: version_file)
+
+    download._save_version("rpi4-mm6108-spi", "test-version")
+
+    assert json.loads(version_file.read_text()) == {
+        "rpi4-mm6108-spi": {"version": "test-version"}
     }
 
 
