@@ -36,6 +36,8 @@ def _list_disks_macos_external() -> List[DiskInfo]:
 
     for entry in all_disks_entries:
         disk = _diskinfo_from_macos_entry(entry, all_mounts)
+        if disk and disk.virtual:
+            continue
         if disk:
             disks.append(disk)
 
@@ -67,6 +69,7 @@ def _list_disks_macos_all() -> List[DiskInfo]:
         size_bytes = _parse_macos_size(_parse_info_field(info_text, "Disk Size"))
         model = _parse_info_field(info_text, "Device / Media Name") or entry
         removable = _is_removable_from_info(info_text)
+        virtual = _is_virtual_from_info(info_text)
         mounted = _find_mounts_for_disk(entry, all_mounts)
         is_system = _check_macos_system(mounted)
         disks.append(
@@ -77,6 +80,7 @@ def _list_disks_macos_all() -> List[DiskInfo]:
                 removable=removable,
                 mounted=mounted,
                 is_system=is_system,
+                virtual=virtual,
             )
         )
 
@@ -93,6 +97,7 @@ def _diskinfo_from_macos_entry(entry: dict, all_mounts: dict) -> Optional[DiskIn
     info_text = _get_diskutil_info_text(dev_path)
     model = _parse_info_field(info_text, "Device / Media Name") or dev_id
     removable = _is_removable_from_info(info_text)
+    virtual = _is_virtual_from_info(info_text)
     is_system = _check_macos_system(mounted)
     return DiskInfo(
         device=dev_path,
@@ -101,6 +106,7 @@ def _diskinfo_from_macos_entry(entry: dict, all_mounts: dict) -> Optional[DiskIn
         removable=removable,
         mounted=mounted,
         is_system=is_system,
+        virtual=virtual,
     )
 
 
@@ -127,6 +133,7 @@ def lookup_device_macos(device: str) -> Optional[DiskInfo]:
     size_bytes = _parse_macos_size(_parse_info_field(info_text, "Disk Size"))
     model = _parse_info_field(info_text, "Device / Media Name") or dev_id
     removable = _is_removable_from_info(info_text)
+    virtual = _is_virtual_from_info(info_text)
     mounted = _find_mounts_for_disk(dev_id, all_mounts)
     is_system = _check_macos_system(mounted)
     return DiskInfo(
@@ -136,6 +143,7 @@ def lookup_device_macos(device: str) -> Optional[DiskInfo]:
         removable=removable,
         mounted=mounted,
         is_system=is_system,
+        virtual=virtual,
     )
 
 
@@ -224,6 +232,17 @@ def _is_removable_from_info(info_text: str) -> bool:
     if location.lower() == "external":
         return True
     return False
+
+
+def _is_virtual_from_info(info_text: str) -> bool:
+    virtual = _parse_info_field(info_text, "Virtual")
+    protocol = _parse_info_field(info_text, "Protocol")
+    model = _parse_info_field(info_text, "Device / Media Name")
+    if virtual.lower() in ("yes", "true"):
+        return True
+    if protocol.lower() == "disk image":
+        return True
+    return model.lower() == "disk image"
 
 
 def _check_macos_system(mounts: List[str]) -> bool:

@@ -27,7 +27,9 @@ def dd_device_path(device: str, *, macos: bool) -> str:
 
 
 def stream_dd_device_path(device: str, *, macos: bool) -> str:
-    return dd_device_path(device, macos=macos) if macos else device
+    if macos:
+        return device.replace("/dev/rdisk", "/dev/disk", 1)
+    return device
 
 
 def stream_dd_block_args(*, macos: bool) -> list[str]:

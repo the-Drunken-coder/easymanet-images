@@ -40,57 +40,72 @@ network restart + boot report ──→ node is ready
 ## Component Responsibilities
 
 ### Core (`packages/core/src/easymanet/`)
+
 Shared domain code for fleet manifests, validation, rendering, disk safety,
 flashing, boot-payload injection, shared workspace paths, local image cache
 state, and platform helpers.
 
 ### CLI (`apps/cli/src/easymanet_cli/`)
+
 Installable automation surface. Dispatches commands: `disks`, `validate`,
 `render`, `flash`, workspace discovery commands, and the image subcommands
 exposed by `easymanet_image`.
 
 ### Image Surface (`packages/image/src/easymanet_image/`)
+
 OpenMANET image builder, image command registration, and release metadata
 generation. Owns the firmware build workflow and the image release manifest.
 
 ### Desktop Surface (`apps/desktop/electron/`, `apps/desktop/src/easymanet_desktop/`)
+
 Local-first Electron operator console. It loads UI files from disk, exposes a
 narrow preload API, and calls the Python desktop bridge for state, disk
 discovery, shared workspace fleet discovery, and fleet validation. The Python
 `easymanet-desktop serve` command keeps a browser-served fallback for
 development and smoke testing.
 
-### Publish Surface (`tools/publish/src/easymanet_publish/`)
-Exports generated public product surfaces locally. It does not configure public
-subrepositories or credentials.
+### Publish Surface (`tools/publish/src/easymanet_publish/`, `tools/packaging/publish_product_repos.py`)
+
+Owns the public product surface definitions. The `easymanet-publish export`
+command creates local previews, while the packaging publish script can generate,
+push, and dispatch the public product repositories when configured with
+credentials.
 
 ### Manifest (`manifest.py`)
+
 Parses `fleet.yml` into a structured Python object. Provides accessor
 methods for mesh settings, defaults, and individual nodes.
 
 ### Validation (`validate.py`)
+
 Checks all required fields, uniqueness constraints, IP format, SSH key
 format, role values, bandwidth values, and password length. Returns
 errors and warnings separately.
 
 ### Render (`render.py`)
+
 Merges mesh settings, defaults, and node-specific overrides into a
 single resolved `provision.json` document for the boot-partition payload.
 
 ### Disks (`disks.py`)
+
 Lists available external/removable disks on macOS (diskutil) and Linux
 (lsblk). Detects system disks and mounted partitions.
 
 ### Image (`image.py`)
+
 Streams `.img` or `.img.gz` to the target block device with progress
 display. Handles unmounting, sync, and eject.
 
 ### Inject (`inject.py`)
+
 Mounts only the FAT boot partition after flashing and writes the
 node-specific `/easymanet/provision.json` payload there.
 
 ### First-boot scripts (`images/openmanet/provisioning/openwrt-overlay/`)
+
 Shipped in the OpenWrt `files/` overlay and baked into the firmware image:
+
 - `etc/uci-defaults/99-easymanet`: UCI defaults trigger that calls `provision.sh`.
 - `usr/lib/easymanet/provision.sh`: Generic shell script that finds the
   boot-partition payload, copies it into overlay storage, and applies

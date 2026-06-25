@@ -181,8 +181,9 @@ nodes:
 With `uplink_interface: wifi`, EasyMANET joins the configured upstream Wi-Fi as
 `wan`. The desktop Mesh and Diagnostics tabs discover nodes through the local
 EasyMANET API (`/v1/identity`, `/v1/neighbors`, `/v1/status`, and gate-only
-`/v1/topology`), so do not enable SSH solely for discovery. Treat any
-WAN-reachable management or API service as trusted-LAN only. With
+`/v1/topology`), so Wi-Fi gateways expose the API on port `10411` to the
+upstream Wi-Fi LAN. Treat any WAN-reachable management or API service as
+trusted-LAN only. With
 `uplink_interface: eth0`, EasyMANET leaves `eth0` on `br-lan` for wired
 management and does not run WAN DHCP on that management bridge.
 
@@ -229,8 +230,12 @@ Priority (highest to lowest):
 - Empty `root_password_hash` does not set a root password on the node.
 - `gateway.uplink_interface: eth0` is reserved for wired management on
   `br-lan`; use a separate uplink or Wi-Fi uplink for WAN routing.
-- `gateway.wifi.enabled` with SSH enabled opens SSH on the WAN firewall zone.
-- Gate topology API exposure on WAN (port 10411) is sensitive on untrusted
-  uplinks.
+- On gate nodes, `gateway.wifi.enabled` binds the EasyMANET API to
+  `0.0.0.0:10411` and opens WAN firewall access to that API, including topology
+  endpoints under `/v1`.
+- On gate nodes, `gateway.wifi.enabled` with SSH enabled also opens SSH on the
+  WAN firewall zone.
+- EasyMANET API exposure on WAN (port 10411) is intended for trusted upstream
+  Wi-Fi LANs and is sensitive on untrusted uplinks.
 - Mesh credentials may be written to `/etc/openmanetd/config.yml` in plaintext
   when that file exists on the image.

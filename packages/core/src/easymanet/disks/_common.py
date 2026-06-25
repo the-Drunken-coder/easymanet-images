@@ -41,6 +41,7 @@ class DiskInfo:
         mounted: Optional[List[str]] = None,
         is_system: bool = False,
         not_in_default_list: bool = False,
+        virtual: bool = False,
     ):
         self.device = device
         self.size_bytes = size_bytes
@@ -49,6 +50,7 @@ class DiskInfo:
         self.mounted = mounted or []
         self.is_system = is_system
         self.not_in_default_list = not_in_default_list
+        self.virtual = virtual
 
     @property
     def size_gb(self) -> float:
@@ -65,6 +67,10 @@ class DiskInfo:
     @property
     def blocking_warnings(self) -> List[str]:
         w: List[str] = []
+        if self.virtual:
+            w.append(
+                "WARNING: Virtual disk image — use --force only for test fixtures"
+            )
         if self.is_system:
             w.append(
                 "WARNING: This appears to be a system disk — use --force to override"

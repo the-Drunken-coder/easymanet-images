@@ -219,6 +219,7 @@ def test_topology_api_overlay_is_packaged():
     topology = OVERLAY / "www" / "easymanet-api" / "v1" / "topology"
     status = OVERLAY / "www" / "easymanet-api" / "v1" / "status"
     provision_text = PROVISION_RUNTIME.read_text()
+    provision_entrypoint = PROVISION_SCRIPT.read_text()
 
     for path in (api, identity, neighbors, topology, status):
         assert path.exists()
@@ -230,7 +231,8 @@ def test_topology_api_overlay_is_packaged():
     assert api_text.index("status-lib.sh") > api_text.index('status)')
     assert "configure_easymanet_api" in provision_text
     assert "uhttpd.easymanet_api" in provision_text
-    assert "allow_easymanet_api_wan=rule" not in provision_text
+    assert '0.0.0.0:$EM_EASYMANET_API_PORT' in provision_text
+    assert "allow_easymanet_api_wan=rule" in provision_entrypoint
     core_check = 'api_home/v1/identity" ] || [ ! -x "$api_home/v1/topology" ] || [ ! -x "$api_home/v1/neighbors"'
     assert core_check in provision_text
     assert 'api_home/v1/status" ] ||' not in provision_text

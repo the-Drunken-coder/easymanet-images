@@ -7,6 +7,7 @@ and clean unmount/eject.
 import os
 import shutil
 import subprocess
+import tempfile
 import zlib
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
@@ -38,6 +39,7 @@ class FlashError(Exception):
 
 
 FlashEventCallback = Callable[[dict[str, Any]], None]
+_MACOS_GZIP_WRITE_CHUNK_BYTES = 1024 * 1024
 
 
 def _emit_event(
@@ -192,6 +194,10 @@ def _write_gz_via_dd(
     *,
     emit: FlashEventCallback | None = None,
 ) -> None:
+    if is_macos():
+        _write_gz_via_macos_stream(image_path, device, emit=emit)
+        return
+
     gzip_cmd = [_tool_path("gzip"), "-dc", image_path]
     output_device = _stream_dd_device_path(device)
     dd_cmd = [
@@ -223,6 +229,84 @@ def _write_gz_via_dd(
     # ("trailing garbage ignored"); payload integrity is validated by _check_gzip_payload.
     if gzip_return not in (0, 2):
         raise subprocess.CalledProcessError(gzip_return, gzip_cmd)
+
+
+def _write_gz_via_macos_stream(
+    image_path: str,
+    device: str,
+    *,
+    emit: FlashEventCallback | None = None,
+) -> None:
+    gzip_cmd = [_tool_path("gzip"), "-dc", image_path]
+    output_device = _stream_dd_device_path(device)
+    with tempfile.TemporaryFile() as gzip_stderr_file:
+        gzip_proc = subprocess.Popen(
+            gzip_cmd,
+            stdout=subprocess.PIPE,
+            stderr=gzip_stderr_file,
+        )
+        assert gzip_proc.stdout is not None
+        fd: int | None = None
+        write_error: OSError | None = None
+        close_error: OSError | None = None
+        try:
+            fd = os.open(output_device, os.O_WRONLY)
+            _write_stream_to_fd(gzip_proc.stdout, fd, emit=emit)
+        except OSError as exc:
+            write_error = exc
+            gzip_proc.kill()
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError as exc:
+                    close_error = exc
+                    gzip_proc.kill()
+
+        gzip_proc.communicate()
+        gzip_stderr_file.seek(0)
+        gzip_stderr = _decode_subprocess_output(gzip_stderr_file.read())
+    if write_error is not None:
+        raise write_error
+    if close_error is not None:
+        raise close_error
+    if gzip_proc.returncode not in (0, 2):
+        raise subprocess.CalledProcessError(
+            gzip_proc.returncode,
+            gzip_cmd,
+            stderr=gzip_stderr,
+        )
+
+
+def _write_stream_to_fd(
+    stream: Any,
+    fd: int,
+    *,
+    emit: FlashEventCallback | None = None,
+) -> None:
+    total_written = 0
+    while True:
+        chunk = stream.read(_MACOS_GZIP_WRITE_CHUNK_BYTES)
+        if not chunk:
+            break
+        _write_all(fd, chunk)
+        total_written += len(chunk)
+        _emit_dd_progress(f"{total_written} bytes transferred", emit)
+
+
+def _write_all(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written == 0:
+            raise OSError("write returned 0 bytes")
+        view = view[written:]
+
+
+def _decode_subprocess_output(output: Any) -> str:
+    if isinstance(output, bytes):
+        return output.decode(errors="replace")
+    return str(output or "")
 
 
 _OVERLAY_WIPE_SECTOR_BYTES = 512

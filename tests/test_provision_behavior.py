@@ -151,6 +151,21 @@ def _gate_provision_json() -> dict:
     }
 
 
+def _wifi_gate_provision_json() -> dict:
+    data = _gate_provision_json()
+    data["node"]["gateway"] = {
+        "enabled": True,
+        "uplink_interface": "wifi",
+        "wifi": {
+            "enabled": True,
+            "ssid": "upstream",
+            "password": "upstream-password",
+            "encryption": "psk2",
+        },
+    }
+    return data
+
+
 def _point_provision_json() -> dict:
     data = _gate_provision_json()
     data["node"] = {
@@ -428,7 +443,7 @@ def test_provision_gate_node_starts_display_status_when_present(tmp_path):
     assert "restarted" in display_state
 
 
-def test_provision_gate_exposes_topology_api_on_management_and_mesh_only(tmp_path):
+def test_provision_non_wifi_gate_exposes_topology_api_on_management_and_mesh_only(tmp_path):
     prefix = tmp_path / "root"
     uci_state = tmp_path / "uci-state"
     _seed_wireless_radios(uci_state)
@@ -448,8 +463,56 @@ def test_provision_gate_exposes_topology_api_on_management_and_mesh_only(tmp_pat
         == "10.41.254.1:10411 10.41.1.1:10411"
     )
     assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.src", env) == ""
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.name", env) == ""
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.proto", env) == ""
     assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.dest_port", env) == ""
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.target", env) == ""
     assert "restarted" in (prefix / "var" / "uhttpd-state").read_text()
+
+
+def test_provision_wifi_gate_exposes_topology_api_on_wan(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    _copy_api_overlay(prefix)
+    _write_uhttpd_stub(prefix)
+
+    result = _run_provision(prefix, _wifi_gate_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    env = _harness_env(uci_state)
+    assert _uci_get(uci_state, "uhttpd.easymanet_api.listen_http", env) == "0.0.0.0:10411"
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.src", env) == "wan"
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.proto", env) == "tcp"
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.dest_port", env) == "10411"
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.target", env) == "ACCEPT"
+    assert "restarted" in (prefix / "var" / "uhttpd-state").read_text()
+
+
+def test_provision_clears_wifi_gate_wan_api_on_non_wifi_rerun(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    _copy_api_overlay(prefix)
+    _write_uhttpd_stub(prefix)
+
+    first = _run_provision(prefix, _wifi_gate_provision_json(), uci_state)
+    assert first.returncode == 0, first.stderr + first.stdout
+
+    (prefix / "etc" / "easymanet" / "provisioned").unlink()
+    second = _run_provision(prefix, _gate_provision_json(), uci_state)
+    assert second.returncode == 0, second.stderr + second.stdout
+
+    env = _harness_env(uci_state)
+    assert (
+        _uci_get(uci_state, "uhttpd.easymanet_api.listen_http", env)
+        == "10.41.254.1:10411 10.41.1.1:10411"
+    )
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.src", env) == ""
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.name", env) == ""
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.proto", env) == ""
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.dest_port", env) == ""
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.target", env) == ""
 
 
 def test_provision_point_exposes_topology_api_only_on_mesh_ip(tmp_path):
@@ -1158,6 +1221,7 @@ def test_provision_sets_openmanetd_mesh_interface_to_bat0(tmp_path):
     assert 'meshNetInterface: "bat0"' in text
     assert 'role: "point"' in text
     assert 'ip: "10.41.2.1"' in text
+    assert (config.stat().st_mode & 0o777) == 0o600
 
 
 def test_late_management_lan_repair_sources_lib_from_explicit_dir(tmp_path):
@@ -1262,19 +1326,8 @@ def test_provision_wifi_uplink_keeps_wan_on_wifi_sta_path(tmp_path):
     prefix = tmp_path / "root"
     uci_state = tmp_path / "uci-state"
     _seed_wireless_radios(uci_state)
-    provision_data = _gate_provision_json()
-    provision_data["node"]["gateway"] = {
-        "enabled": True,
-        "uplink_interface": "wifi",
-        "wifi": {
-            "enabled": True,
-            "ssid": "upstream",
-            "password": "upstream-password",
-            "encryption": "psk2",
-        },
-    }
 
-    result = _run_provision(prefix, provision_data, uci_state)
+    result = _run_provision(prefix, _wifi_gate_provision_json(), uci_state)
     assert result.returncode == 0, result.stderr + result.stdout
 
     env = _harness_env(uci_state)
