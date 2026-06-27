@@ -35,7 +35,7 @@ config wifi-iface 'mesh0'
 
 config wifi-iface 'ap0'          # Only if local AP enabled
     option device 'radio0'
-    option network 'lan'
+    option network 'ahwlan'
     option mode 'ap'
     option ssid '<ap-ssid>'
     option encryption 'sae'
@@ -45,8 +45,8 @@ config wifi-iface 'ap0'          # Only if local AP enabled
 ### `/etc/config/network`
 
 OpenMANET uses BATMAN-adv over the 802.11s HaLow interface. The
-802.11s interface is a BATMAN hard interface; node IPs belong on
-`bat0`, not directly on `wlan0`:
+802.11s interface is a BATMAN hard interface, while node IPs and client
+access belong on the `br-ahwlan` mesh LAN bridge:
 
 ```conf
 config interface 'bat0'
@@ -61,9 +61,15 @@ config interface 'mesh'
     option proto 'batadv_hardif'
     option master 'bat0'
 
-config interface 'meship'
+config device 'ahwlan_dev'
+    option name 'br-ahwlan'
+    option type 'bridge'
+    list ports 'bat0'
+    list ports 'eth0'             # Omit only when eth0 is the gate WAN uplink
+
+config interface 'ahwlan'
     option proto 'static'
-    option device 'bat0'
+    option device 'br-ahwlan'
     option ipaddr '<node-ip>'
     option netmask '255.255.0.0'
 
@@ -114,11 +120,19 @@ Do not set `dot11MeshHWMPRootMode=1`; it caused
 
 ### `/etc/config/dhcp`
 
-Mesh IP interface is excluded from DHCP serving:
+Mesh-side DHCP is served by EasyMANET gate nodes on the OpenMANET bridge.
+Point nodes still bridge client traffic onto `br-ahwlan`, but do not run
+the same DHCP pool on the flat mesh LAN:
 
 ```conf
-config dhcp 'meship'
-    option interface 'meship'
+config dhcp 'ahwlan'             # gate nodes
+    option interface 'ahwlan'
+    option start '351'
+    option limit '16'
+    option leasetime '12h'
+
+config dhcp 'ahwlan'             # point nodes
+    option interface 'ahwlan'
     option ignore '1'
 ```
 
@@ -129,7 +143,7 @@ Mesh zone (open between mesh nodes):
 ```conf
 config zone
     option name 'mesh'
-    option network 'meship'
+    option network 'ahwlan'
     option input 'ACCEPT'
     option output 'ACCEPT'
     option forward 'ACCEPT'
@@ -148,6 +162,7 @@ Root password hash is updated.
 OpenMANET daemon configuration (if the daemon is present):
 
 ```yaml
+meshNetInterface: "br-ahwlan"
 mesh:
   id: "<mesh-id>"
   password: "<mesh-password>"
@@ -211,8 +226,8 @@ field test requires one.
 
 | Role | UCI Changes | Network Behavior |
 |------|------------|------------------|
-| **gate** | BATMAN gateway mode `server`, mesh gate announcements enabled, WAN or management LAN preserved | Routes mesh traffic to uplink (internet/other network) |
-| **point** | BATMAN gateway mode `client`, mesh gate announcements disabled, no WAN | Participates in mesh, no external routing |
+| **gate** | BATMAN gateway mode `server`, mesh gate announcements enabled, WAN configured on the selected uplink | Routes mesh traffic to uplink (internet/other network) |
+| **point** | BATMAN gateway mode `client`, mesh gate announcements disabled, no WAN | Participates in mesh and uses the mesh gate for external routing |
 
 ---
 

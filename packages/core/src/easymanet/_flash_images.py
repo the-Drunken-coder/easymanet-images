@@ -67,11 +67,18 @@ def resolve_base_image(
                     FlashErrorCode.IMAGE,
                     f"Base image checksum error: {exc}",
                 ) from exc
+            warnings.append(
+                "Custom local image is checksum-only and not an official EasyMANET release."
+            )
         else:
             warnings.append("Warning: local --base-image was not verified with --image-sha256.")
-        if normalized_sha256:
-            warnings.append("Custom local image is checksum-only and not an official EasyMANET release.")
-        return str(base_image_path), image_payload(path=str(base_image_path), sha256=normalized_sha256, trust_status="checksum-only", source="custom"), warnings
+        payload = image_payload(
+            path=str(base_image_path),
+            sha256=normalized_sha256,
+            trust_status="checksum-only",
+            source="custom",
+        )
+        return str(base_image_path), payload, warnings
 
     if image_url:
         if not normalized_sha256:
@@ -102,11 +109,8 @@ def resolve_base_image(
         cached = get_cached_image_fn(target)
         if cached:
             return str(cached), image_payload(path=str(cached), cached_path=str(cached)), warnings
-        return (
-            f"<auto-download for {target}>",
-            image_payload(path=f"<auto-download for {target}>"),
-            warnings,
-        )
+        placeholder = f"<auto-download for {target}>"
+        return placeholder, image_payload(path=placeholder), warnings
 
     latest = check_latest_version_fn(target)
     if not latest:
@@ -140,6 +144,17 @@ def resolve_base_image(
     latest_image_status = str(getattr(latest, "image_status", "current"))
     latest_manifest_url = str(getattr(latest, "manifest_url", ""))
     latest_warnings = tuple(str(warning) for warning in getattr(latest, "warnings", ()))
+    latest_payload = {
+        "version": latest.version,
+        "url": latest.url,
+        "sha256": latest.sha256,
+        "trust_status": latest_trust_status,
+        "source": latest_source,
+        "channel": latest_channel,
+        "release_tag": latest_release_tag,
+        "image_status": latest_image_status,
+        "manifest_url": latest_manifest_url,
+    }
     latest_trust = getattr(latest, "trust", {
         "status": latest_trust_status,
         "source": latest_source,
@@ -158,24 +173,13 @@ def resolve_base_image(
         )
     warnings.extend(latest_warnings)
 
-    if not download and not (latest_source == "official" and latest_trust_status == PENDING_TRUST_STATUS):
+    pending_official = latest_source == "official" and latest_trust_status == PENDING_TRUST_STATUS
+    if not download and not pending_official:
         cached = get_cached_image_fn(target, sha256=latest.sha256, url=latest.url)
         if cached:
             return (
                 str(cached),
-                image_payload(
-                    path=str(cached),
-                    cached_path=str(cached),
-                    version=latest.version,
-                    url=latest.url,
-                    sha256=latest.sha256,
-                    trust_status=latest_trust_status,
-                    source=latest_source,
-                    channel=latest_channel,
-                    release_tag=latest_release_tag,
-                    image_status=latest_image_status,
-                    manifest_url=latest_manifest_url,
-                ),
+                image_payload(path=str(cached), cached_path=str(cached), **latest_payload),
                 warnings,
             )
 
@@ -199,8 +203,8 @@ def resolve_base_image(
                 force=download,
                 emit=emit,
             )
-        if latest_source == "official" and latest_trust_status == PENDING_TRUST_STATUS:
-            latest_trust_status = OFFICIAL_TRUST_STATUS
+        if pending_official:
+            latest_payload["trust_status"] = OFFICIAL_TRUST_STATUS
     except OSError as exc:
         raise FlashWorkflowError(
             FlashErrorCode.IMAGE,
@@ -208,19 +212,7 @@ def resolve_base_image(
         ) from exc
     return (
         str(path),
-        image_payload(
-            path=str(path),
-            cached_path=str(path),
-            version=latest.version,
-            url=latest.url,
-            sha256=latest.sha256,
-            trust_status=latest_trust_status,
-            source=latest_source,
-            channel=latest_channel,
-            release_tag=latest_release_tag,
-            image_status=latest_image_status,
-            manifest_url=latest_manifest_url,
-        ),
+        image_payload(path=str(path), cached_path=str(path), **latest_payload),
         warnings,
     )
 

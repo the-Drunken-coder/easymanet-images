@@ -28,6 +28,11 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 : "${EM_LAN_FALLBACK_IP:=10.41.254.1}"
 : "${EM_LAN_NETMASK:=255.255.255.0}"
 : "${EM_UPLINK_DNS:=1.1.1.1 8.8.8.8}"
+: "${EM_AHWLAN_IFACE:=ahwlan}"
+: "${EM_AHWLAN_BRIDGE:=br-ahwlan}"
+: "${EM_AHWLAN_DHCP_START:=351}"
+: "${EM_AHWLAN_DHCP_LIMIT:=16}"
+: "${EM_AHWLAN_DHCP_LEASETIME:=12h}"
 : "${EM_MESH11SD_MESH_FWDING:=0}"
 : "${EM_MESH11SD_MAX_PEER_LINKS:=10}"
 : "${EM_MESH11SD_RSSI_THRESHOLD:=0}"
@@ -158,6 +163,18 @@ if [ "$NODE_ROLE" = "gate" ]; then
     MESH_GATE_ANNOUNCEMENTS="1"
 fi
 
+UPLINK_INTERFACE="$(json_val node gateway uplink_interface 2>/dev/null || true)"
+[ -n "$UPLINK_INTERFACE" ] || UPLINK_INTERFACE="eth0"
+ETH0_MESH_SIDE=1
+if [ "$NODE_ROLE" = "gate" ] && [ "$WIFI_UPLINK_ENABLED" -ne 1 ] && [ "$UPLINK_INTERFACE" = "eth0" ]; then
+    ETH0_MESH_SIDE=0
+fi
+
+find_network_device_section() {
+    bridge_name="$1"
+    uci show network | sed -n "s/^network\.\([^.=]*\)\.name='$bridge_name'$/\1/p" | head -n 1
+}
+
 SSH_ENABLED=0
 if [ -n "$(json_val management ssh_enabled)" ]; then
     json_bool management ssh_enabled && SSH_ENABLED=1
@@ -231,7 +248,7 @@ if json_bool node local_ap enabled && [ "$WIFI_UPLINK_ENABLED" -ne 1 ]; then
         uci_set wireless."$AP_RADIO".disabled="0"
         uci_set wireless.ap0=wifi-iface
         uci_set wireless.ap0.device="$AP_RADIO"
-        uci_set wireless.ap0.network="lan"
+        uci_set wireless.ap0.network="$EM_AHWLAN_IFACE"
         uci_set wireless.ap0.mode="ap"
         uci_set wireless.ap0.ssid="$LOCAL_AP_SSID"
         uci_set wireless.ap0.encryption="$EM_LOCAL_AP_ENCRYPTION"
@@ -288,37 +305,62 @@ uci_set network.mesh.master="bat0"
 uci -q delete network.mesh.ipaddr 2>/dev/null || true
 uci -q delete network.mesh.netmask 2>/dev/null || true
 
-uci_set network.meship=interface
-uci_set network.meship.proto="static"
-uci_set network.meship.device="bat0"
-uci_set network.meship.ipaddr="$NODE_IP"
-uci_set network.meship.netmask="$EM_MESH_NETMASK"
+uci -q delete network.meship 2>/dev/null || true
+uci -q delete network.lan 2>/dev/null || true
+brlan_device_section="$(find_network_device_section br-lan)"
+if [ -n "$brlan_device_section" ]; then
+    uci -q delete network."$brlan_device_section" 2>/dev/null || true
+fi
 
-if ! uci -q get network.lan >/dev/null 2>&1; then
-    uci_set network.lan=interface
+# OpenMANET's mesh LAN is br-ahwlan, not raw bat0. BATMAN, Ethernet,
+# and the local AP share this flat 10.41.0.0/16 bridge so OpenMANETd
+# can manage gateway routing and client access using its normal model.
+ahwlan_device_section="$(find_network_device_section "$EM_AHWLAN_BRIDGE")"
+[ -n "$ahwlan_device_section" ] || ahwlan_device_section="ahwlan_dev"
+uci_set network."$ahwlan_device_section"=device
+uci_set network."$ahwlan_device_section".name="$EM_AHWLAN_BRIDGE"
+uci_set network."$ahwlan_device_section".type="bridge"
+uci -q delete network."$ahwlan_device_section".ports 2>/dev/null || true
+uci_add_list network."$ahwlan_device_section".ports="bat0"
+
+# eth0 is mesh-side client access unless this gateway explicitly uses it
+# as the WAN uplink. In that uplink case, keep it out of br-ahwlan.
+if [ "$ETH0_MESH_SIDE" -eq 1 ]; then
+    uci_add_list network."$ahwlan_device_section".ports="eth0"
 fi
-uci_set network.lan.device="br-lan"
-uci_set network.lan.proto="static"
-if [ -z "$(uci -q get network.lan.ipaddr)" ]; then
-    uci_set network.lan.ipaddr="$EM_LAN_FALLBACK_IP"
-fi
-uci_set network.lan.netmask="$EM_LAN_NETMASK"
+
+uci_set network."$EM_AHWLAN_IFACE"=interface
+uci_set network."$EM_AHWLAN_IFACE".proto="static"
+uci_set network."$EM_AHWLAN_IFACE".device="$EM_AHWLAN_BRIDGE"
+uci_set network."$EM_AHWLAN_IFACE".ipaddr="$NODE_IP"
+uci_set network."$EM_AHWLAN_IFACE".netmask="$EM_MESH_NETMASK"
+uci_set network."$EM_AHWLAN_IFACE".dns="$EM_UPLINK_DNS"
 uci_commit network
 
 uci -q delete dhcp.mesh 2>/dev/null || true
-uci_set dhcp.meship=dhcp
-uci_set dhcp.meship.interface="meship"
-uci_set dhcp.meship.ignore="1"
-uci_set dhcp.lan=dhcp
-uci_set dhcp.lan.interface="lan"
-uci_set dhcp.lan.start="100"
-uci_set dhcp.lan.limit="150"
-uci_set dhcp.lan.leasetime="12h"
+uci -q delete dhcp.meship 2>/dev/null || true
+uci -q delete dhcp.lan 2>/dev/null || true
+uci_set dhcp."$EM_AHWLAN_IFACE"=dhcp
+uci_set dhcp."$EM_AHWLAN_IFACE".interface="$EM_AHWLAN_IFACE"
+# br-ahwlan is one flat mesh LAN, so only the gate serves DHCP. Point
+# nodes bridge client traffic to the gate instead of racing it with the
+# same lease pool.
+if [ "$NODE_ROLE" = "gate" ]; then
+    uci -q delete dhcp."$EM_AHWLAN_IFACE".ignore 2>/dev/null || true
+    uci_set dhcp."$EM_AHWLAN_IFACE".start="$EM_AHWLAN_DHCP_START"
+    uci_set dhcp."$EM_AHWLAN_IFACE".limit="$EM_AHWLAN_DHCP_LIMIT"
+    uci_set dhcp."$EM_AHWLAN_IFACE".leasetime="$EM_AHWLAN_DHCP_LEASETIME"
+else
+    uci_set dhcp."$EM_AHWLAN_IFACE".ignore="1"
+    uci -q delete dhcp."$EM_AHWLAN_IFACE".start 2>/dev/null || true
+    uci -q delete dhcp."$EM_AHWLAN_IFACE".limit 2>/dev/null || true
+    uci -q delete dhcp."$EM_AHWLAN_IFACE".leasetime 2>/dev/null || true
+fi
 uci_commit dhcp
 
 uci_set firewall.mesh_zone=zone
 uci_set firewall.mesh_zone.name="mesh"
-uci_set firewall.mesh_zone.network="meship"
+uci_set firewall.mesh_zone.network="$EM_AHWLAN_IFACE"
 uci_set firewall.mesh_zone.input="ACCEPT"
 uci_set firewall.mesh_zone.output="ACCEPT"
 uci_set firewall.mesh_zone.forward="ACCEPT"
@@ -354,28 +396,21 @@ uci_set mesh11sd.mbca.mbca_min_beacon_gap_ms="$EM_MESH11SD_MBCA_MIN_BEACON_GAP_M
 uci_set mesh11sd.mbca.mbca_tbtt_adj_interval_sec="$EM_MESH11SD_MBCA_TBTT_ADJ_INTERVAL_SEC"
 uci_commit mesh11sd
 
-echo "Ensuring eth0 stays on br-lan for management..." >> "$LOG_FILE"
+echo "Ensuring mesh-side Ethernet matches br-ahwlan policy..." >> "$LOG_FILE"
 if [ -f "$NETWORK_HELPERS" ]; then
     EASYMANET_NETWORK_LOG="$LOG_FILE" EASYMANET_PROVISION_JSON="$PROVISION_JSON" . "$NETWORK_HELPERS"
     easymanet_repair_management_lan firstboot
 fi
 
 if [ "$NODE_ROLE" = "gate" ] && [ "$WIFI_UPLINK_ENABLED" -ne 1 ]; then
-    UPLINK="$(json_val node gateway uplink_interface 2>/dev/null || true)"
-    [ -n "$UPLINK" ] || UPLINK="eth0"
-    if [ "$UPLINK" = "eth0" ]; then
-        uci -q delete network.wan 2>/dev/null || true
-        uci -q delete network.wan6 2>/dev/null || true
-        uci_commit network
-    else
-        uci_set network.wan=interface
-        uci_set network.wan.proto="dhcp"
-        uci_set network.wan.device="$UPLINK"
-        uci_set network.wan.ifname="$UPLINK"
-        uci_set network.wan.peerdns="0"
-        uci_set network.wan.dns="$EM_UPLINK_DNS"
-        uci_commit network
-    fi
+    uci_set network.wan=interface
+    uci_set network.wan.proto="dhcp"
+    uci_set network.wan.device="$UPLINK_INTERFACE"
+    uci_set network.wan.ifname="$UPLINK_INTERFACE"
+    uci_set network.wan.peerdns="0"
+    uci_set network.wan.dns="$EM_UPLINK_DNS"
+    uci -q delete network.wan6 2>/dev/null || true
+    uci_commit network
 fi
 
 if [ "$WIFI_UPLINK_ENABLED" -eq 1 ]; then
@@ -429,8 +464,10 @@ if [ -f "$openmanetd_config" ]; then
     fi
     old_umask="$(umask)"
     umask 077
+    # OpenMANETd expects the mesh LAN bridge, not raw bat0, so its
+    # gateway route and DNS management sees the same interface as clients.
     if ! cat > "$openmanetd_config" <<EOF
-meshNetInterface: "bat0"
+meshNetInterface: "$EM_AHWLAN_BRIDGE"
 mesh:
   id: "${MESH_ID}"
   password: "${MESH_PASSWORD}"

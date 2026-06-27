@@ -113,7 +113,8 @@ def test_management_lan_repair_hook_is_packaged_and_enabled():
     assert "provision-lib.sh" in helper_text
     assert "easymanet_repair_management_lan" in helper_text
     assert "uci -q delete network.wan" in helper_text
-    assert "brctl addif br-lan" in helper_text
+    assert "brctl addif" in helper_text
+    assert "br-ahwlan" in helper_text
     init_text = init.read_text()
     assert "sleep 25" in init_text
     assert "EASYMANET_LIB_DIR=/usr/lib/easymanet" in init_text

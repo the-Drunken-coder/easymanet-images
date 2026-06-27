@@ -128,7 +128,7 @@ Default gateway settings for gate nodes.
 | Field | Type | Description |
 |-------|------|-------------|
 | `enabled` | bool | Whether gateway mode is enabled |
-| `uplink_interface` | string | Uplink network interface name. `eth0` is reserved for wired management on `br-lan`; use Wi-Fi or a separate interface for WAN routing. |
+| `uplink_interface` | string | Uplink network interface name. `eth0` is WAN when selected on a gate; otherwise Ethernet remains mesh-side access on `br-ahwlan`. |
 | `wifi` | object | Optional Wi-Fi uplink settings. Defaults can hold SSID/password while a gate node enables them with `gateway.wifi.enabled: true`. |
 
 ### `defaults.role` (string)
@@ -148,7 +148,7 @@ node name used with `--node` in CLI commands.
 |-------|------|----------|---------|-------------|
 | `role` | string | yes (or from defaults) | `point` | `gate` or `point` |
 | `hostname` | string | yes | node name | System hostname |
-| `ip` | string | yes | — | Static node IP on the BATMAN mesh interface (`bat0`) |
+| `ip` | string | yes | — | Static node IP on the OpenMANET mesh bridge (`br-ahwlan`) |
 | `target` | string | no | from defaults | Hardware target |
 | `local_ap` | object | no | from defaults | Local AP override |
 | `gateway` | object | no | from defaults | Gateway settings override |
@@ -183,9 +183,8 @@ With `uplink_interface: wifi`, EasyMANET joins the configured upstream Wi-Fi as
 EasyMANET API (`/v1/identity`, `/v1/neighbors`, `/v1/status`, and gate-only
 `/v1/topology`), so Wi-Fi gateways expose the API on port `10411` to the
 upstream Wi-Fi LAN. Treat any WAN-reachable management or API service as
-trusted-LAN only. With
-`uplink_interface: eth0`, EasyMANET leaves `eth0` on `br-lan` for wired
-management and does not run WAN DHCP on that management bridge.
+trusted-LAN only. With `uplink_interface: eth0`, EasyMANET runs WAN DHCP on
+`eth0` and keeps that port out of `br-ahwlan`.
 
 ---
 
@@ -228,8 +227,9 @@ Priority (highest to lowest):
 ## Security
 
 - Empty `root_password_hash` does not set a root password on the node.
-- `gateway.uplink_interface: eth0` is reserved for wired management on
-  `br-lan`; use a separate uplink or Wi-Fi uplink for WAN routing.
+- `gateway.uplink_interface: eth0` makes Ethernet the gateway WAN uplink.
+  Use Wi-Fi or a separate uplink if Ethernet should stay mesh-side on
+  `br-ahwlan`.
 - On gate nodes, `gateway.wifi.enabled` binds the EasyMANET API to
   `0.0.0.0:10411` and opens WAN firewall access to that API, including topology
   endpoints under `/v1`.

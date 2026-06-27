@@ -132,7 +132,6 @@ configure_easymanet_api() {
     if [ "$NODE_ROLE" = "gate" ] && [ "$WIFI_UPLINK_ENABLED" -eq 1 ]; then
         uci_add_list uhttpd.easymanet_api.listen_http="0.0.0.0:$EM_EASYMANET_API_PORT"
     elif [ "$NODE_ROLE" = "gate" ]; then
-        uci_add_list uhttpd.easymanet_api.listen_http="$EM_LAN_FALLBACK_IP:$EM_EASYMANET_API_PORT"
         uci_add_list uhttpd.easymanet_api.listen_http="$NODE_IP:$EM_EASYMANET_API_PORT"
     else
         uci_add_list uhttpd.easymanet_api.listen_http="$NODE_IP:$EM_EASYMANET_API_PORT"

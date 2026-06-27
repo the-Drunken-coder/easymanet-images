@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -311,6 +312,14 @@ def _uci_get(uci_state: Path, key: str, env: dict) -> str:
     return result.stdout.strip()
 
 
+def _bridge_ports(uci_state: Path, bridge_name: str, env: dict) -> set[str]:
+    pattern = rf"^network\.([^.=]+)\.name='{re.escape(bridge_name)}'$"
+    match = re.search(pattern, uci_state.read_text(), re.MULTILINE)
+    assert match, f"missing bridge device {bridge_name} in {uci_state.read_text()}"
+    ports = _uci_get(uci_state, f"network.{match.group(1)}.ports", env)
+    return set(ports.split())
+
+
 def _run_provision(
     prefix: Path,
     provision_data: dict,
@@ -351,11 +360,22 @@ def test_provision_gate_node_smoke(tmp_path):
     assert _uci_get(uci_state, "wireless.mesh0.device", env) == "radio2"
     assert _uci_get(uci_state, "wireless.mesh0.mesh_id", env) == "test-mesh"
     assert _uci_get(uci_state, "network.bat0.gw_mode", env) == "server"
-    assert _uci_get(uci_state, "network.meship.ipaddr", env) == "10.41.1.1"
-    assert _uci_get(uci_state, "network.wan.proto", env) == ""
-    assert _uci_get(uci_state, "network.wan.device", env) == ""
-    assert _uci_get(uci_state, "network.wan.ifname", env) == ""
+    assert _uci_get(uci_state, "network.ahwlan.device", env) == "br-ahwlan"
+    assert _uci_get(uci_state, "network.ahwlan.ipaddr", env) == "10.41.1.1"
+    assert _uci_get(uci_state, "network.ahwlan.dns", env) == "1.1.1.1 8.8.8.8"
+    assert _bridge_ports(uci_state, "br-ahwlan", env) == {"bat0"}
+    assert _uci_get(uci_state, "network.meship.ipaddr", env) == ""
+    assert _uci_get(uci_state, "network.lan.device", env) == ""
+    assert _uci_get(uci_state, "network.wan.proto", env) == "dhcp"
+    assert _uci_get(uci_state, "network.wan.device", env) == "eth0"
+    assert _uci_get(uci_state, "network.wan.ifname", env) == "eth0"
+    assert _uci_get(uci_state, "dhcp.ahwlan.interface", env) == "ahwlan"
+    assert _uci_get(uci_state, "dhcp.ahwlan.start", env) == "351"
+    assert _uci_get(uci_state, "dhcp.ahwlan.limit", env) == "16"
+    assert _uci_get(uci_state, "dhcp.ahwlan.leasetime", env) == "12h"
+    assert _uci_get(uci_state, "dhcp.ahwlan.ignore", env) == ""
     assert _uci_get(uci_state, "mesh11sd.mesh_params.mesh_gate_announcements", env) == "1"
+    assert _uci_get(uci_state, "firewall.mesh_zone.network", env) == "ahwlan"
     assert _uci_get(uci_state, "firewall.mesh_wan_forwarding.src", env) == "mesh"
     assert _uci_get(uci_state, "firewall.mesh_wan_forwarding.dest", env) == "wan"
 
@@ -378,12 +398,61 @@ def test_provision_point_node_disables_ssh(tmp_path):
 
     env = _harness_env(uci_state)
     assert _uci_get(uci_state, "network.bat0.gw_mode", env) == "client"
-    assert _uci_get(uci_state, "network.meship.ipaddr", env) == "10.41.2.1"
+    assert _uci_get(uci_state, "network.ahwlan.device", env) == "br-ahwlan"
+    assert _uci_get(uci_state, "network.ahwlan.ipaddr", env) == "10.41.2.1"
+    assert _bridge_ports(uci_state, "br-ahwlan", env) == {"bat0", "eth0"}
+    assert _uci_get(uci_state, "dhcp.ahwlan.interface", env) == "ahwlan"
+    assert _uci_get(uci_state, "dhcp.ahwlan.ignore", env) == "1"
+    assert _uci_get(uci_state, "dhcp.ahwlan.start", env) == ""
+    assert _uci_get(uci_state, "dhcp.ahwlan.limit", env) == ""
+    assert _uci_get(uci_state, "dhcp.ahwlan.leasetime", env) == ""
     assert _uci_get(uci_state, "mesh11sd.mesh_params.mesh_gate_announcements", env) == "0"
+    assert _uci_get(uci_state, "firewall.mesh_zone.network", env) == "ahwlan"
     assert _uci_get(uci_state, "firewall.mesh_wan_forwarding.src", env) == ""
 
     dropbear_state = (prefix / "var" / "dropbear-state").read_text()
     assert "disabled" in dropbear_state
+
+
+def test_provision_point_node_disables_stale_mesh_dhcp_pool(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    with uci_state.open("a") as state:
+        state.write("dhcp.ahwlan=dhcp\n")
+        state.write("dhcp.ahwlan.interface='ahwlan'\n")
+        state.write("dhcp.ahwlan.start='351'\n")
+        state.write("dhcp.ahwlan.limit='16'\n")
+        state.write("dhcp.ahwlan.leasetime='12h'\n")
+
+    result = _run_provision(prefix, _point_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    env = _harness_env(uci_state)
+    assert _uci_get(uci_state, "dhcp.ahwlan.interface", env) == "ahwlan"
+    assert _uci_get(uci_state, "dhcp.ahwlan.ignore", env) == "1"
+    assert _uci_get(uci_state, "dhcp.ahwlan.start", env) == ""
+    assert _uci_get(uci_state, "dhcp.ahwlan.limit", env) == ""
+    assert _uci_get(uci_state, "dhcp.ahwlan.leasetime", env) == ""
+
+
+def test_provision_local_ap_attaches_to_openmanet_mesh_bridge(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    provision_data = _point_provision_json()
+    provision_data["node"]["local_ap"] = {
+        "enabled": True,
+        "ssid": "point01-local",
+        "password": "local-password",
+    }
+
+    result = _run_provision(prefix, provision_data, uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    env = _harness_env(uci_state)
+    assert _uci_get(uci_state, "wireless.ap0.network", env) == "ahwlan"
+    assert _bridge_ports(uci_state, "br-ahwlan", env) == {"bat0", "eth0"}
 
 
 def test_provision_gate_node_starts_led_status_when_present(tmp_path):
@@ -443,7 +512,7 @@ def test_provision_gate_node_starts_display_status_when_present(tmp_path):
     assert "restarted" in display_state
 
 
-def test_provision_non_wifi_gate_exposes_topology_api_on_management_and_mesh_only(tmp_path):
+def test_provision_non_wifi_gate_exposes_topology_api_on_mesh_only(tmp_path):
     prefix = tmp_path / "root"
     uci_state = tmp_path / "uci-state"
     _seed_wireless_radios(uci_state)
@@ -458,10 +527,7 @@ def test_provision_non_wifi_gate_exposes_topology_api_on_management_and_mesh_onl
         "/www/easymanet-api"
     )
     assert _uci_get(uci_state, "uhttpd.easymanet_api.cgi_prefix", env) == "/v1"
-    assert (
-        _uci_get(uci_state, "uhttpd.easymanet_api.listen_http", env)
-        == "10.41.254.1:10411 10.41.1.1:10411"
-    )
+    assert _uci_get(uci_state, "uhttpd.easymanet_api.listen_http", env) == "10.41.1.1:10411"
     assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.src", env) == ""
     assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.name", env) == ""
     assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.proto", env) == ""
@@ -506,7 +572,7 @@ def test_provision_clears_wifi_gate_wan_api_on_non_wifi_rerun(tmp_path):
     env = _harness_env(uci_state)
     assert (
         _uci_get(uci_state, "uhttpd.easymanet_api.listen_http", env)
-        == "10.41.254.1:10411 10.41.1.1:10411"
+        == "10.41.1.1:10411"
     )
     assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.src", env) == ""
     assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.name", env) == ""
@@ -1208,7 +1274,7 @@ def test_provision_reapplies_mesh_channel_after_network_restart(tmp_path):
     assert _uci_get(uci_state, "wireless.radio2.s1g_chanbw", env) == "2"
 
 
-def test_provision_sets_openmanetd_mesh_interface_to_bat0(tmp_path):
+def test_provision_sets_openmanetd_mesh_interface_to_brahwlan(tmp_path):
     prefix = tmp_path / "root"
     uci_state = tmp_path / "uci-state"
     _seed_wireless_radios(uci_state)
@@ -1218,7 +1284,7 @@ def test_provision_sets_openmanetd_mesh_interface_to_bat0(tmp_path):
     assert result.returncode == 0, result.stderr + result.stdout
 
     text = config.read_text()
-    assert 'meshNetInterface: "bat0"' in text
+    assert 'meshNetInterface: "br-ahwlan"' in text
     assert 'role: "point"' in text
     assert 'ip: "10.41.2.1"' in text
     assert (config.stat().st_mode & 0o777) == 0o600
@@ -1257,13 +1323,15 @@ easymanet_repair_management_lan late-boot
         env,
     )
     assert result.returncode == 0, result.stderr + result.stdout
-    assert _uci_get(uci_state, "network.lan.device", env) == "br-lan"
-    assert _uci_get(uci_state, "network.lan.ipaddr", env) == "10.41.254.1"
+    assert _uci_get(uci_state, "network.ahwlan.device", env) == "br-ahwlan"
+    assert _uci_get(uci_state, "network.ahwlan.ipaddr", env) == "10.41.2.1"
+    assert _uci_get(uci_state, "network.lan.device", env) == ""
     assert _uci_get(uci_state, "network.wan.device", env) == "phy1-sta0"
-    assert "network.@device[0].ports='eth0'" in uci_state.read_text()
+    assert _bridge_ports(uci_state, "br-ahwlan", env) == {"bat0", "eth0"}
+    assert "name='br-lan'" not in uci_state.read_text()
 
 
-def test_late_management_lan_repair_removes_stale_brlan_wan(tmp_path):
+def test_late_management_lan_repair_repairs_stale_brlan_wan_to_eth0(tmp_path):
     provision_json = tmp_path / "provision.json"
     provision_json.write_text(json.dumps(_gate_provision_json(), indent=2))
     uci_state = tmp_path / "uci-state"
@@ -1298,9 +1366,103 @@ easymanet_repair_management_lan late-boot
         env,
     )
     assert result.returncode == 0, result.stderr + result.stdout
+    assert _uci_get(uci_state, "network.wan.device", env) == "eth0"
+    assert _uci_get(uci_state, "network.wan.ifname", env) == "eth0"
+    assert _bridge_ports(uci_state, "br-ahwlan", env) == {"bat0"}
+    assert "name='br-lan'" not in uci_state.read_text()
+
+
+def test_late_management_lan_repair_restores_usb0_wan_from_stale_brlan_wan(tmp_path):
+    provision_data = _gate_provision_json()
+    provision_data["node"]["gateway"] = {
+        "enabled": True,
+        "uplink_interface": "usb0",
+    }
+    provision_json = tmp_path / "provision.json"
+    provision_json.write_text(json.dumps(provision_data, indent=2))
+    uci_state = tmp_path / "uci-state"
+    uci_state.write_text(
+        "\n".join(
+            [
+                "network.@device[0].name='br-lan'",
+                "network.@device[0].type='bridge'",
+                "network.wan=interface",
+                "network.wan.proto='dhcp'",
+                "network.wan.device='br-lan'",
+                "network.wan.ifname='br-lan'",
+            ]
+        )
+        + "\n"
+    )
+    env = _harness_env(
+        uci_state,
+        {
+            "EASYMANET_LIB_DIR": str(NETWORK_SCRIPT.parent),
+            "EASYMANET_PROVISION_JSON": str(provision_json),
+            "EASYMANET_NETWORK_LOG": str(tmp_path / "network.log"),
+        },
+    )
+
+    result = _run_sh(
+        f'''
+cd "{tmp_path}"
+. "{NETWORK_SCRIPT}"
+easymanet_repair_management_lan late-boot
+''',
+        env,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert _uci_get(uci_state, "network.wan.proto", env) == "dhcp"
+    assert _uci_get(uci_state, "network.wan.device", env) == "usb0"
+    assert _uci_get(uci_state, "network.wan.ifname", env) == "usb0"
+    assert _uci_get(uci_state, "network.wan.peerdns", env) == "0"
+    assert _uci_get(uci_state, "network.wan.dns", env) == "1.1.1.1 8.8.8.8"
+    assert _bridge_ports(uci_state, "br-ahwlan", env) == {"bat0", "eth0"}
+    assert "name='br-lan'" not in uci_state.read_text()
+
+
+def test_late_management_lan_repair_restores_wifi_wan_from_stale_brlan_wan(tmp_path):
+    provision_json = tmp_path / "provision.json"
+    provision_json.write_text(json.dumps(_wifi_gate_provision_json(), indent=2))
+    uci_state = tmp_path / "uci-state"
+    uci_state.write_text(
+        "\n".join(
+            [
+                "network.@device[0].name='br-lan'",
+                "network.@device[0].type='bridge'",
+                "network.wan=interface",
+                "network.wan.proto='dhcp'",
+                "network.wan.device='br-lan'",
+                "network.wan.ifname='br-lan'",
+            ]
+        )
+        + "\n"
+    )
+    env = _harness_env(
+        uci_state,
+        {
+            "EASYMANET_LIB_DIR": str(NETWORK_SCRIPT.parent),
+            "EASYMANET_PROVISION_JSON": str(provision_json),
+            "EASYMANET_NETWORK_LOG": str(tmp_path / "network.log"),
+        },
+    )
+
+    result = _run_sh(
+        f'''
+cd "{tmp_path}"
+. "{NETWORK_SCRIPT}"
+easymanet_repair_management_lan late-boot
+''',
+        env,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert _uci_get(uci_state, "network.wan.proto", env) == "dhcp"
     assert _uci_get(uci_state, "network.wan.device", env) == ""
     assert _uci_get(uci_state, "network.wan.ifname", env) == ""
-    assert "network.@device[0].ports='eth0'" in uci_state.read_text()
+    assert _uci_get(uci_state, "network.wan.peerdns", env) == "0"
+    assert _uci_get(uci_state, "network.wan.dns", env) == "1.1.1.1 8.8.8.8"
+    assert _bridge_ports(uci_state, "br-ahwlan", env) == {"bat0", "eth0"}
+    assert "name='br-lan'" not in uci_state.read_text()
 
 
 def test_provision_non_eth0_uplink_configures_wan(tmp_path):
@@ -1320,6 +1482,7 @@ def test_provision_non_eth0_uplink_configures_wan(tmp_path):
     assert _uci_get(uci_state, "network.wan.proto", env) == "dhcp"
     assert _uci_get(uci_state, "network.wan.device", env) == "usb0"
     assert _uci_get(uci_state, "network.wan.ifname", env) == "usb0"
+    assert _bridge_ports(uci_state, "br-ahwlan", env) == {"bat0", "eth0"}
 
 
 def test_provision_wifi_uplink_keeps_wan_on_wifi_sta_path(tmp_path):
@@ -1336,6 +1499,7 @@ def test_provision_wifi_uplink_keeps_wan_on_wifi_sta_path(tmp_path):
     assert _uci_get(uci_state, "network.wan.proto", env) == "dhcp"
     assert _uci_get(uci_state, "network.wan.device", env) == ""
     assert _uci_get(uci_state, "network.wan.ifname", env) == ""
+    assert _bridge_ports(uci_state, "br-ahwlan", env) == {"bat0", "eth0"}
 
 
 def test_provision_removes_boot_json_after_success(tmp_path):
