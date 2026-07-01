@@ -6,7 +6,7 @@ This repository is a generated EasyMANET public product surface.
 - Public repo: `easymanet-images`
 - Authoring repo: `the-Drunken-coder/easymanet`
 - Source ref: `main`
-- Source commit: `9e5f725a1dbf8dcb0e0fb3693c9b0e5221ce2d25`
+- Source commit: `bda010d030f5465ba9577155ea2df5a009fcca34`
 
 Normal development should happen in the authoring repo. Changes are published
 here by the authoring repo publish process so the public product surfaces do

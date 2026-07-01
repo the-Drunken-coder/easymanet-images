@@ -1,0 +1,3 @@
+default via 192.0.2.1 dev wan proto static
+10.41.0.0/16 dev br-ahwlan proto kernel scope link src 10.41.1.1
+192.0.2.0/24 dev wan proto kernel scope link src 192.0.2.10

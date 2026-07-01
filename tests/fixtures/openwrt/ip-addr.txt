@@ -1,0 +1,11 @@
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    inet 127.0.0.1/8 scope host lo
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000
+    link/ether dc:a6:32:00:41:01 brd ff:ff:ff:ff:ff:ff
+3: bat0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master br-ahwlan state UNKNOWN group default qlen 1000
+    link/ether 9a:55:24:91:92:4a brd ff:ff:ff:ff:ff:ff
+4: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master bat0 state UP group default qlen 1000
+    link/ether bc:2a:33:96:af:2a brd ff:ff:ff:ff:ff:ff
+5: br-ahwlan: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000
+    link/ether 9a:55:24:91:92:4a brd ff:ff:ff:ff:ff:ff
+    inet 10.41.1.1/16 brd 10.41.255.255 scope global br-ahwlan

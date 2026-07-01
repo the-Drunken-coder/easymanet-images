@@ -1,0 +1,14 @@
+{
+	"radio2": {
+		"up": true,
+		"interfaces": [
+			{
+				"ifname": "wlan0",
+				"config": {
+					"mode": "mesh",
+					"mesh_id": "test-mesh"
+				}
+			}
+		]
+	}
+}

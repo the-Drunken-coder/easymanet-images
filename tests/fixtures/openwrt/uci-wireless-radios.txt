@@ -1,0 +1,5 @@
+wireless.radio2.type='morse'
+wireless.radio0.type='mac80211'
+wireless.radio3.type='mac80211'
+wireless.radio3.path='platform/soc/fe300000.mmcnr/mmc_host/mmc1/mmc1:0001/mmc1:0001:1'
+wireless.radio3.band='2g'

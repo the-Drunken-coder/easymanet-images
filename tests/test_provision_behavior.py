@@ -150,7 +150,7 @@ def _gate_provision_json() -> dict:
         "version": 1,
         "mesh": {
             "id": "test-mesh",
-            "password": "mesh-password-123",
+            "password": "fixture-mesh-key",
             "channel": 42,
             "bandwidth_mhz": 2,
             "country": "US",

@@ -1,0 +1,3 @@
+mesh11sd running
+mesh interface: wlan0
+mesh gate announcements: enabled

@@ -1,0 +1,2 @@
+bridge name	bridge id		STP enabled	interfaces
+br-ahwlan		7fff.9a552491924a	no		bat0

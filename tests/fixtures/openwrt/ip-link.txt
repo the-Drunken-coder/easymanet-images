@@ -1,0 +1,4 @@
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq master br-ahwlan state UP mode DEFAULT group default qlen 1000
+3: bat0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master br-ahwlan state UNKNOWN mode DEFAULT group default qlen 1000
+4: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master bat0 state UP mode DEFAULT group default qlen 1000
+5: br-ahwlan: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000
