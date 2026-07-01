@@ -46,18 +46,29 @@ def _packaged_overlay_paths() -> set[str]:
     return packaged
 
 
-def main() -> int:
-    packaged = _packaged_overlay_paths()
+def overlay_files() -> list[str]:
     if not OVERLAY.is_dir():
-        print(f"Overlay directory not found: {OVERLAY}", file=sys.stderr)
-        return 1
+        raise FileNotFoundError(f"Overlay directory not found: {OVERLAY}")
 
-    overlay_files = sorted(
+    return sorted(
         path.relative_to(ROOT).as_posix()
         for path in OVERLAY.rglob("*")
         if _is_packaged_overlay_file(path)
     )
-    missing = [rel for rel in overlay_files if rel not in packaged]
+
+
+def missing_packaged_overlay_paths() -> list[str]:
+    packaged = _packaged_overlay_paths()
+    return [rel for rel in overlay_files() if rel not in packaged]
+
+
+def main() -> int:
+    try:
+        missing = missing_packaged_overlay_paths()
+        count = len(overlay_files())
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
     if missing:
         print(
@@ -68,7 +79,7 @@ def main() -> int:
             print(f"  {rel}", file=sys.stderr)
         return 1
 
-    print(f"All {len(overlay_files)} overlay files are listed in pyproject.toml")
+    print(f"All {count} overlay files are listed in pyproject.toml")
     return 0
 
 

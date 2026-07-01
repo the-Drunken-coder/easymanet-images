@@ -6,6 +6,10 @@ Morse MM6108 SPI HaLow HAT. Future agent sessions should read this before
 changing the firmware build, first-boot provisioning, flashing flow, or network
 debugging path.
 
+Dated handoff sections are historical hardware snapshots. Preserve them for
+field evidence, but re-check current branches, workflow runs, device IPs, and
+repo code before treating a captured next step as still active.
+
 ## Build Workflow
 
 - Full OpenMANET image builds are slow on GitHub-hosted runners. A successful
@@ -550,13 +554,13 @@ function at the PHY level, which matches the symptoms seen here.
 - After setup wizard, OpenMANET could display the new IP before rebooting
   to reduce confusion.
 
-## 2026-05-11 Handoff: <wifi-ssid> Wi-Fi Uplink Bring-Up
+## Historical Handoff: 2026-05-11 <wifi-ssid> Wi-Fi Uplink Bring-Up
 
-This section captures the latest state before handing work to a new agent.
+This section captures the state at that handoff point.
 
 Date captured: 2026-05-11.
 
-### Current Build/Repo State
+### Captured Build/Repo State
 
 - Branch: `add-project-files`
 - Latest pushed commit:
@@ -714,9 +718,9 @@ Avoid sharing the EasyMANET management LAN with an upstream Ethernet network.
 Use Wi-Fi uplink or a separate wired interface when the gate should route WAN
 traffic.
 
-### What To Do Next
+### Historical Next Steps Captured Then
 
-When build `25678707977` finishes:
+At the time, when build `25678707977` finished:
 
 1. Download the new artifact and copy the SPI image into `dist/`.
 2. Reflash both USB drives with the new image. This time the flash command

@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,6 +16,16 @@ PROVISION_LIB = OVERLAY / "usr" / "lib" / "easymanet" / "provision-lib.sh"
 PROVISION_SCRIPT = OVERLAY / "usr" / "lib" / "easymanet" / "provision.sh"
 NETWORK_SCRIPT = OVERLAY / "usr" / "lib" / "easymanet" / "network.sh"
 HARNESS = Path(__file__).resolve().parent / "shell_harness"
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "openwrt"
+
+
+def _fixture_text(name: str) -> str:
+    return (FIXTURES / name).read_text()
+
+
+def _write_executable(path: Path, text: str) -> None:
+    path.write_text(text)
+    path.chmod(0o755)
 
 
 def _harness_env(uci_state: Path, extra: dict | None = None) -> dict:
@@ -27,14 +38,7 @@ def _harness_env(uci_state: Path, extra: dict | None = None) -> dict:
 
 
 def _seed_wireless_radios(uci_state: Path) -> None:
-    lines = [
-        "wireless.radio2.type='morse'",
-        "wireless.radio0.type='mac80211'",
-        "wireless.radio3.type='mac80211'",
-        "wireless.radio3.path='platform/soc/fe300000.mmcnr/mmc_host/mmc1/mmc1:0001/mmc1:0001:1'",
-        "wireless.radio3.band='2g'",
-    ]
-    uci_state.write_text("\n".join(lines) + "\n")
+    uci_state.write_text(_fixture_text("uci-wireless-radios.txt"))
 
 
 def _run_sh(script_body: str, env: dict) -> subprocess.CompletedProcess:
@@ -123,6 +127,22 @@ uci -q get 'wireless.foo\bar'
     )
     assert result.returncode == 0, result.stderr + result.stdout
     assert result.stdout.strip() == "value1"
+
+
+def test_uci_harness_missing_get_fails(tmp_path):
+    uci_state = tmp_path / "uci-state"
+    env = _harness_env(uci_state)
+
+    result = subprocess.run(
+        ["uci", "-q", "get", "network.missing.option"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert result.stdout == ""
 
 
 def _gate_provision_json() -> dict:
@@ -581,6 +601,148 @@ def test_provision_clears_wifi_gate_wan_api_on_non_wifi_rerun(tmp_path):
     assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.target", env) == ""
 
 
+def test_provision_rerun_from_wifi_gate_to_point_clears_stale_wan_state(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+
+    first = _run_provision(prefix, _wifi_gate_provision_json(), uci_state)
+    assert first.returncode == 0, first.stderr + first.stdout
+
+    with uci_state.open("a") as state:
+        state.write("network.wan6=interface\n")
+        state.write("network.wan6.proto='dhcpv6'\n")
+        state.write("network.wan6.device='wan0'\n")
+        state.write("network.wan6.ifname='wan0'\n")
+
+    (prefix / "etc" / "easymanet" / "provisioned").unlink()
+    second = _run_provision(prefix, _point_provision_json(), uci_state)
+    assert second.returncode == 0, second.stderr + second.stdout
+
+    env = _harness_env(uci_state)
+    assert _uci_get(uci_state, "wireless.wan0.network", env) == ""
+    assert _uci_get(uci_state, "wireless.wan0.mode", env) == ""
+    assert _uci_get(uci_state, "network.wan.proto", env) == ""
+    assert _uci_get(uci_state, "network.wan.device", env) == ""
+    assert _uci_get(uci_state, "network.wan.ifname", env) == ""
+    assert _uci_get(uci_state, "network.wan6.proto", env) == ""
+    assert _uci_get(uci_state, "network.wan6.device", env) == ""
+    assert _uci_get(uci_state, "network.wan6.ifname", env) == ""
+    assert _uci_get(uci_state, "firewall.allow_ssh_wan.src", env) == ""
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.src", env) == ""
+    assert _uci_get(uci_state, "dhcp.ahwlan.ignore", env) == "1"
+    assert _bridge_ports(uci_state, "br-ahwlan", env) == {"bat0", "eth0"}
+
+
+@pytest.mark.parametrize(
+    "mesh_side_wan",
+    ["eth0", "br-lan", "br-ahwlan", "bat0", "mesh", "wlan0"],
+)
+def test_provision_point_clears_mesh_side_wan_aliases(tmp_path, mesh_side_wan):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    with uci_state.open("a") as state:
+        state.write("network.wan=interface\n")
+        state.write("network.wan.proto='dhcp'\n")
+        state.write(f"network.wan.device='{mesh_side_wan}'\n")
+        state.write(f"network.wan.ifname='{mesh_side_wan}'\n")
+        state.write("network.wan6=interface\n")
+        state.write("network.wan6.proto='dhcpv6'\n")
+        state.write(f"network.wan6.device='{mesh_side_wan}'\n")
+        state.write(f"network.wan6.ifname='{mesh_side_wan}'\n")
+
+    result = _run_provision(prefix, _point_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    env = _harness_env(uci_state)
+    assert _uci_get(uci_state, "network.wan.proto", env) == ""
+    assert _uci_get(uci_state, "network.wan.device", env) == ""
+    assert _uci_get(uci_state, "network.wan.ifname", env) == ""
+    assert _uci_get(uci_state, "network.wan6.proto", env) == ""
+    assert _uci_get(uci_state, "network.wan6.device", env) == ""
+    assert _uci_get(uci_state, "network.wan6.ifname", env) == ""
+
+
+@pytest.mark.parametrize(
+    "mesh_side_wan6",
+    ["eth0", "br-lan", "br-ahwlan", "bat0", "mesh", "wlan0"],
+)
+def test_provision_point_clears_mesh_side_wan6_without_wan(tmp_path, mesh_side_wan6):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    with uci_state.open("a") as state:
+        state.write("network.wan6=interface\n")
+        state.write("network.wan6.proto='dhcpv6'\n")
+        state.write(f"network.wan6.device='{mesh_side_wan6}'\n")
+        state.write(f"network.wan6.ifname='{mesh_side_wan6}'\n")
+
+    result = _run_provision(prefix, _point_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    env = _harness_env(uci_state)
+    assert _uci_get(uci_state, "network.wan.proto", env) == ""
+    assert _uci_get(uci_state, "network.wan.device", env) == ""
+    assert _uci_get(uci_state, "network.wan.ifname", env) == ""
+    assert _uci_get(uci_state, "network.wan6.proto", env) == ""
+    assert _uci_get(uci_state, "network.wan6.device", env) == ""
+    assert _uci_get(uci_state, "network.wan6.ifname", env) == ""
+
+
+def test_provision_point_preserves_non_mesh_wan_and_clears_mesh_side_wan6(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    with uci_state.open("a") as state:
+        state.write("network.wan=interface\n")
+        state.write("network.wan.proto='dhcp'\n")
+        state.write("network.wan.device='phy1-sta0'\n")
+        state.write("network.wan.ifname='phy1-sta0'\n")
+        state.write("network.wan6=interface\n")
+        state.write("network.wan6.proto='dhcpv6'\n")
+        state.write("network.wan6.device='eth0'\n")
+        state.write("network.wan6.ifname='eth0'\n")
+
+    result = _run_provision(prefix, _point_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    env = _harness_env(uci_state)
+    assert _uci_get(uci_state, "network.wan.proto", env) == "dhcp"
+    assert _uci_get(uci_state, "network.wan.device", env) == "phy1-sta0"
+    assert _uci_get(uci_state, "network.wan.ifname", env) == "phy1-sta0"
+    assert _uci_get(uci_state, "network.wan6.proto", env) == ""
+    assert _uci_get(uci_state, "network.wan6.device", env) == ""
+    assert _uci_get(uci_state, "network.wan6.ifname", env) == ""
+
+
+def test_provision_point_preserves_non_mesh_wan_state(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    with uci_state.open("a") as state:
+        state.write("network.wan=interface\n")
+        state.write("network.wan.proto='dhcp'\n")
+        state.write("network.wan.device='phy1-sta0'\n")
+        state.write("network.wan.ifname='phy1-sta0'\n")
+        state.write("network.wan6=interface\n")
+        state.write("network.wan6.proto='dhcpv6'\n")
+        state.write("network.wan6.device='phy1-sta0'\n")
+        state.write("network.wan6.ifname='phy1-sta0'\n")
+
+    result = _run_provision(prefix, _point_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    env = _harness_env(uci_state)
+    assert _uci_get(uci_state, "network.wan.proto", env) == "dhcp"
+    assert _uci_get(uci_state, "network.wan.device", env) == "phy1-sta0"
+    assert _uci_get(uci_state, "network.wan.ifname", env) == "phy1-sta0"
+    assert _uci_get(uci_state, "network.wan6.proto", env) == "dhcpv6"
+    assert _uci_get(uci_state, "network.wan6.device", env) == "phy1-sta0"
+    assert _uci_get(uci_state, "network.wan6.ifname", env) == "phy1-sta0"
+    assert _bridge_ports(uci_state, "br-ahwlan", env) == {"bat0", "eth0"}
+
+
 def test_provision_point_exposes_topology_api_only_on_mesh_ip(tmp_path):
     prefix = tmp_path / "root"
     uci_state = tmp_path / "uci-state"
@@ -653,11 +815,7 @@ wlan0          bc:2a:33:96:af:68     0.430s (7.1)
 
 
 def test_topology_api_parses_current_batctl_neighbors_fixture():
-    fixture = """
-[B.A.T.M.A.N. adv 2025.4-openwrt-2, MainIF/MAC: wlan0/bc:2a:33:96:af:2a (bat0/9a:55:24:91:92:4a BATMAN_V)]
-         Neighbor   last-seen      speed           IF
-bc:2a:33:96:af:68    0.090s (        7.2) [     wlan0]
-"""
+    fixture = _fixture_text("batctl-neighbors-current.txt")
 
     result = subprocess.run(
         ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh")],
@@ -704,11 +862,7 @@ def test_topology_api_parses_batctl_originators_fixture():
 
 
 def test_topology_api_parses_current_batctl_originators_fixture():
-    fixture = """
-[B.A.T.M.A.N. adv 2025.4-openwrt-2, MainIF/MAC: wlan0/bc:2a:33:96:af:2a (bat0/9a:55:24:91:92:4a BATMAN_V)]
-   Originator        last-seen ( throughput)  Nexthop           [outgoingIF]
- * bc:2a:33:96:af:68    0.700s (        7.2)  bc:2a:33:96:af:68 [     wlan0]
-"""
+    fixture = _fixture_text("batctl-originators-current.txt")
 
     result = subprocess.run(
         ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh")],
@@ -732,30 +886,105 @@ def test_topology_api_parses_current_batctl_originators_fixture():
 
 def _write_status_bins(bin_dir: Path, *, ping_ok: bool = True, neighbors: bool = True) -> None:
     bin_dir.mkdir(exist_ok=True)
-    (bin_dir / "ping").write_text(
-        "#!/bin/sh\n" + ("exit 0\n" if ping_ok else "exit 1\n")
+    _write_executable(
+        bin_dir / "ping",
+        "#!/bin/sh\n" + ("exit 0\n" if ping_ok else "exit 1\n"),
     )
-    neighbor_body = """cat <<'EOF'
-[B.A.T.M.A.N. adv 2025.4-openwrt-2, MainIF/MAC: wlan0/bc:2a:33:96:af:2a (bat0/9a:55:24:91:92:4a BATMAN_V)]
-     Neighbor   last-seen      speed           IF
-bc:2a:33:96:af:68    0.090s (        7.2) [     wlan0]
-EOF"""
+    neighbor_body = f"cat {shlex.quote(str(FIXTURES / 'batctl-neighbors-current.txt'))}"
     if not neighbors:
         neighbor_body = "true"
-    (bin_dir / "batctl").write_text(
+    originator_body = f"cat {shlex.quote(str(FIXTURES / 'batctl-originators-current.txt'))}"
+    _write_executable(
+        bin_dir / "batctl",
         f"""#!/bin/sh
 case "$1" in
   n)
     {neighbor_body}
     ;;
   o)
-    true
+    {originator_body}
     ;;
 esac
-"""
+""",
     )
-    (bin_dir / "ping").chmod(0o755)
-    (bin_dir / "batctl").chmod(0o755)
+
+
+def _write_boot_report_bins(bin_dir: Path) -> None:
+    bin_dir.mkdir(exist_ok=True)
+
+    def fixture(name: str) -> str:
+        return shlex.quote(str(FIXTURES / name))
+
+    _write_executable(bin_dir / "ping", "#!/bin/sh\nexit 0\n")
+    _write_executable(
+        bin_dir / "dmesg",
+        "#!/bin/sh\necho '[    1.0] EasyMANET sim boot'\n",
+    )
+    _write_executable(
+        bin_dir / "logread",
+        "#!/bin/sh\necho 'easymanet: provisioning complete'\n",
+    )
+    _write_executable(
+        bin_dir / "ip",
+        f"""#!/bin/sh
+case "$1" in
+  addr) cat {fixture("ip-addr.txt")} ;;
+  link) cat {fixture("ip-link.txt")} ;;
+  route) cat {fixture("ip-route.txt")} ;;
+esac
+""",
+    )
+    _write_executable(
+        bin_dir / "brctl",
+        f"""#!/bin/sh
+case "$1" in
+  show) cat {fixture("brctl-show.txt")} ;;
+  addif) exit 0 ;;
+esac
+""",
+    )
+    _write_executable(
+        bin_dir / "batctl",
+        f"""#!/bin/sh
+case "$1" in
+  n) cat {fixture("batctl-neighbors-current.txt")} ;;
+  o) cat {fixture("batctl-originators-current.txt")} ;;
+  if) echo 'wlan0: active' ;;
+esac
+""",
+    )
+    _write_executable(
+        bin_dir / "mesh11sd",
+        f"""#!/bin/sh
+case "$1" in
+  status) cat {fixture("mesh11sd-status.txt")} ;;
+esac
+""",
+    )
+    _write_executable(
+        bin_dir / "wifi",
+        f"""#!/bin/sh
+case "$1" in
+  status) cat {fixture("wifi-status.txt")} ;;
+esac
+""",
+    )
+    _write_executable(
+        bin_dir / "iw",
+        """#!/bin/sh
+case "$*" in
+  dev) echo 'phy#0'; echo 'Interface wlan0' ;;
+  'dev wlan0 info') echo 'type mesh point' ;;
+  'dev wlan0 station dump') echo 'Station bc:2a:33:96:af:68 (on wlan0)' ;;
+  'dev wlan0 mpath dump') echo 'DEST ADDR         NEXT HOP' ;;
+esac
+""",
+    )
+    _write_executable(bin_dir / "ps", "#!/bin/sh\necho '1234 root openmanetd'\n")
+    _write_executable(
+        bin_dir / "mount",
+        "#!/bin/sh\necho '/dev/root on / type squashfs (ro)'\n",
+    )
 
 
 def _status_env(tmp_path: Path, provision_data: dict, *, ping_ok: bool = True, neighbors: bool = True) -> dict:
@@ -984,6 +1213,64 @@ write_easymanet_status_json
     payload = json.loads(result.stdout)
     assert payload["support_code"] == "EM-DIAG-PARTIAL"
     assert "boot report collection continued" in payload["warnings"][0]
+
+
+def test_boot_report_generates_openwrt_fixture_outputs(tmp_path):
+    provision_json = tmp_path / "provision.json"
+    provision_json.write_text(json.dumps(_gate_provision_json()))
+    provisioned = tmp_path / "provisioned"
+    provisioned.write_text("provisioned\n")
+    uci_state = tmp_path / "uci-state"
+    uci_state.write_text(_fixture_text("uci-openwrt-state.txt"))
+
+    api_home = tmp_path / "www" / "easymanet-api"
+    (api_home / "v1").mkdir(parents=True)
+    status_wrapper = api_home / "v1" / "status"
+    status_wrapper.write_text("#!/bin/sh\n")
+    status_wrapper.chmod(0o755)
+
+    bin_dir = tmp_path / "bin"
+    _write_boot_report_bins(bin_dir)
+    report_dir = tmp_path / "boot" / "easymanet"
+    report_dir.mkdir(parents=True)
+
+    script = f'''
+. "{OVERLAY / "usr" / "lib" / "easymanet" / "boot-report.sh"}"
+find_boot_report_dir() {{
+  printf '%s' "{report_dir}"
+}}
+write_easymanet_boot_report openwrt-sim
+'''
+    result = subprocess.run(
+        ["sh", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{HARNESS}:{os.environ.get('PATH', '')}",
+            "EASYMANET_LIB_DIR": str(OVERLAY / "usr" / "lib" / "easymanet"),
+            "EASYMANET_PROVISION_JSON": str(provision_json),
+            "EASYMANET_PROVISIONED_FLAG": str(provisioned),
+            "EASYMANET_API_HOME": str(api_home),
+            "EASYMANET_API_SCRIPT": str(
+                OVERLAY / "usr" / "lib" / "easymanet" / "api.sh"
+            ),
+            "UCI_STATE_FILE": str(uci_state),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    latest = report_dir / "boot-report-latest"
+    assert "reason=openwrt-sim" in (latest / "summary.txt").read_text()
+    assert "br-ahwlan" in (latest / "ip-addr.txt").read_text()
+    assert "bc:2a:33:96:af:68" in (latest / "batctl-neighbors.txt").read_text()
+    assert "wlan0: active" in (latest / "batctl-ifaces.txt").read_text()
+    assert "mesh11sd running" in (latest / "mesh11sd-status.txt").read_text()
+    assert "priv_key_pwd='<redacted>'" in (latest / "uci-mesh11sd.txt").read_text()
+    status = json.loads((latest / "status.json").read_text())
+    assert status["support_code"] == "EM-OK"
+    assert status["mesh"]["neighbor_count"] == 1
 
 
 def test_topology_api_escapes_control_characters_in_json_string():

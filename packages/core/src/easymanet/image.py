@@ -1,7 +1,8 @@
-"""Image flashing — write OpenMANET images to SD cards/USB drives.
+"""Low-level OpenMANET image writer for SD cards and USB drives.
 
-Handles .img and .img.gz, streaming decompression, verify/sync,
-and clean unmount/eject.
+This module owns destructive media writes: image file validation, .img/.img.gz
+streaming, disk unmounts, stale overlay wipe, sync, and eject. It does not
+resolve fleet configs, download images, or stage EasyMANET boot payloads.
 """
 
 import os

@@ -237,6 +237,10 @@ uci_set wireless.mesh0.encryption="$EM_MESH_ENCRYPTION"
 uci_set wireless.mesh0.key="$MESH_PASSWORD"
 uci_set wireless.mesh0.mesh_fwding="$EM_MESH_FWDING"
 
+if [ "$WIFI_UPLINK_ENABLED" -ne 1 ]; then
+    uci -q delete wireless.wan0 2>/dev/null || true
+fi
+
 if json_bool node local_ap enabled && [ "$WIFI_UPLINK_ENABLED" -ne 1 ]; then
     LOCAL_AP_SSID="$(json_val node local_ap ssid)"
     LOCAL_AP_PASSWORD="$(json_val node local_ap password)"
@@ -335,6 +339,41 @@ uci_set network."$EM_AHWLAN_IFACE".device="$EM_AHWLAN_BRIDGE"
 uci_set network."$EM_AHWLAN_IFACE".ipaddr="$NODE_IP"
 uci_set network."$EM_AHWLAN_IFACE".netmask="$EM_MESH_NETMASK"
 uci_set network."$EM_AHWLAN_IFACE".dns="$EM_UPLINK_DNS"
+if [ "$NODE_ROLE" != "gate" ]; then
+    wan_device="$(uci -q get network.wan.device || true)"
+    wan_ifname="$(uci -q get network.wan.ifname || true)"
+    wan6_device="$(uci -q get network.wan6.device || true)"
+    wan6_ifname="$(uci -q get network.wan6.ifname || true)"
+    clear_point_wan=0
+    clear_point_wan6=0
+    if [ -z "$wan_device$wan_ifname" ]; then
+        if uci -q get network.wan.proto >/dev/null 2>&1; then
+            clear_point_wan=1
+        fi
+    fi
+    if [ -z "$wan6_device$wan6_ifname" ]; then
+        if uci -q get network.wan6.proto >/dev/null 2>&1; then
+            clear_point_wan6=1
+        fi
+    fi
+    case " $wan_device $wan_ifname " in
+        *" eth0 "*|*" br-lan "*|*" $EM_AHWLAN_BRIDGE "*|*" bat0 "*|*" mesh "*|*" wlan0 "*)
+            clear_point_wan=1
+            ;;
+    esac
+    case " $wan6_device $wan6_ifname " in
+        *" eth0 "*|*" br-lan "*|*" $EM_AHWLAN_BRIDGE "*|*" bat0 "*|*" mesh "*|*" wlan0 "*)
+            clear_point_wan6=1
+            ;;
+    esac
+    if [ "$clear_point_wan" -eq 1 ]; then
+        uci -q delete network.wan 2>/dev/null || true
+        clear_point_wan6=1
+    fi
+    if [ "$clear_point_wan6" -eq 1 ]; then
+        uci -q delete network.wan6 2>/dev/null || true
+    fi
+fi
 uci_commit network
 
 uci -q delete dhcp.mesh 2>/dev/null || true
@@ -365,6 +404,7 @@ uci_set firewall.mesh_zone.input="ACCEPT"
 uci_set firewall.mesh_zone.output="ACCEPT"
 uci_set firewall.mesh_zone.forward="ACCEPT"
 uci -q delete firewall.mesh_wan_forwarding 2>/dev/null || true
+uci -q delete firewall.allow_ssh_wan 2>/dev/null || true
 uci -q delete firewall.allow_easymanet_api_wan 2>/dev/null || true
 if [ "$NODE_ROLE" = "gate" ]; then
     uci_set firewall.mesh_wan_forwarding=forwarding

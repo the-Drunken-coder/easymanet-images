@@ -57,8 +57,8 @@ def inject(
     *,
     ssh_enabled: Optional[bool] = None,
 ) -> List[Tuple[str, bool]]:
-    provision_json = render(manifest, node_name, ssh_enabled=ssh_enabled)
     if dry_run:
+        render(manifest, node_name, ssh_enabled=ssh_enabled)
         return [
             ("/boot/easymanet/provision.json", True),
             ("Base image must already include EasyMANET first-boot hooks", True),
@@ -66,23 +66,43 @@ def inject(
 
     mount_point, mounted_here = _mount_boot_partition(device)
     try:
-        boot_root = Path(mount_point)
-        dest_dir = boot_root / "easymanet"
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest_path = dest_dir / "provision.json"
-        dest_path.write_text(provision_json)
-        results = [
-            ("/boot/easymanet/provision.json", True),
-            ("Base image must already include EasyMANET first-boot hooks", True),
-        ]
-        cmdline_result = _fix_usb_boot_root(boot_root)
-        if cmdline_result:
-            results.append((cmdline_result, True))
-        return results
+        return stage_boot_payload(
+            Path(mount_point),
+            manifest,
+            node_name,
+            ssh_enabled=ssh_enabled,
+        )
     except OSError as e:
         raise InjectError(f"Failed to write boot-partition provision.json: {e}") from e
     finally:
         _cleanup_mount(device, mount_point, mounted_here)
+
+
+def stage_boot_payload(
+    boot_root: Path,
+    manifest: Manifest,
+    node_name: str,
+    *,
+    ssh_enabled: Optional[bool] = None,
+) -> List[Tuple[str, bool]]:
+    provision_json = render(manifest, node_name, ssh_enabled=ssh_enabled)
+    dest_dir = boot_root / "easymanet"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / "provision.json"
+    dest_path.write_text(provision_json)
+    try:
+        dest_path.chmod(0o600)
+    except OSError:
+        # FAT/exFAT boot media may not honor POSIX permissions.
+        pass
+    results = [
+        ("/boot/easymanet/provision.json", True),
+        ("Base image must already include EasyMANET first-boot hooks", True),
+    ]
+    cmdline_result = _fix_usb_boot_root(boot_root)
+    if cmdline_result:
+        results.append((cmdline_result, True))
+    return results
 
 
 def inject_dry_run_info(_manifest: Manifest, _node_name: str) -> str:

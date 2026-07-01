@@ -1,4 +1,8 @@
-"""Base image resolution helpers for the flash workflow."""
+"""Flash-time base image resolution and read-only image metadata.
+
+This module chooses the firmware image path and trust/checksum metadata for a
+flash plan. It does not write block devices or stage boot-partition payloads.
+"""
 
 from __future__ import annotations
 

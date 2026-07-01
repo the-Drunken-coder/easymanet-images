@@ -1,4 +1,9 @@
-"""Structured flash workflow shared by CLI and desktop surfaces."""
+"""Structured flash workflow shared by CLI and desktop surfaces.
+
+This module owns flash planning, validation, step ordering, and structured
+result/event shapes. It delegates base-image selection to ``_flash_images`` and
+destructive media writes to ``image``.
+"""
 
 from __future__ import annotations
 
@@ -20,7 +25,6 @@ from ._flash_display import (
 from ._flash_images import (
     CUSTOM_IMAGE_VERSION,
     flash_image_details,
-    image_payload as _image_payload,
     resolve_base_image as _resolve_base_image,
 )
 from ._flash_types import (
@@ -64,6 +68,12 @@ def resolve_base_image(
     *,
     emit: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[str, dict[str, Any], list[str]]:
+    """Resolve the image through the public workflow patch point.
+
+    The implementation lives in ``_flash_images``. The dependency arguments
+    intentionally come from this module so existing callers and tests can keep
+    patching ``easymanet.flash`` when they need to control image resolution.
+    """
     return _resolve_base_image(
         target,
         base_image,
@@ -127,18 +137,7 @@ def run_flash_workflow(
     manifest = prepared.manifest
     image_path = prepared.image_path
     ssh_enabled = prepared.ssh_enabled
-
-    def send(
-        event_type: str,
-        message: str = "",
-        *,
-        level: str = "info",
-        **data: Any,
-    ) -> None:
-        event = FlashEvent(event_type, message, level=level, data=data)
-        events.append(event)
-        if emit:
-            emit(event)
+    send = _event_sender(events, emit)
 
     try:
         if manifest is None:
@@ -161,15 +160,10 @@ def run_flash_workflow(
                 image_path=image_path,
                 force=options.force,
                 skip_overlay_wipe=options.skip_overlay_wipe,
-                emit=lambda payload: send(
-                    str(payload.get("type", "flash")),
-                    str(payload.get("message", "")),
-                    level=str(payload.get("level", "info")),
-                    **{
-                        key: value
-                        for key, value in payload.items()
-                        if key not in {"type", "message", "level"}
-                    },
+                emit=lambda payload: _forward_media_event(
+                    payload,
+                    send,
+                    default_type="flash",
                 ),
             )
         except FlashError as exc:
@@ -209,15 +203,10 @@ def run_flash_workflow(
         if not finish_flash(
             options.device,
             eject=not options.no_eject,
-            emit=lambda payload: send(
-                str(payload.get("type", "finish")),
-                str(payload.get("message", "")),
-                level=str(payload.get("level", "info")),
-                **{
-                    key: value
-                    for key, value in payload.items()
-                    if key not in {"type", "message", "level"}
-                },
+            emit=lambda payload: _forward_media_event(
+                payload,
+                send,
+                default_type="finish",
             ),
         ):
             raise FlashWorkflowError(
@@ -272,18 +261,7 @@ def _prepare_flash_workflow(
     manifest: Manifest | None = None
     image_path = ""
     ssh_enabled: bool | None = None
-
-    def send(
-        event_type: str,
-        message: str = "",
-        *,
-        level: str = "info",
-        **data: Any,
-    ) -> None:
-        event = FlashEvent(event_type, message, level=level, data=data)
-        events.append(event)
-        if emit:
-            emit(event)
+    send = _event_sender(events, emit)
 
     try:
         _validate_options(options)
@@ -457,6 +435,44 @@ def _prepare_flash_workflow(
             image_path=image_path,
             ssh_enabled=ssh_enabled,
         )
+
+
+def _event_sender(
+    events: list[FlashEvent],
+    emit: FlashEventCallback | None,
+) -> Callable[..., None]:
+    def send(
+        event_type: str,
+        message: str = "",
+        *,
+        level: str = "info",
+        **data: Any,
+    ) -> None:
+        event = FlashEvent(event_type, message, level=level, data=data)
+        events.append(event)
+        if emit:
+            emit(event)
+
+    return send
+
+
+def _forward_media_event(
+    payload: dict[str, Any],
+    send: Callable[..., None],
+    *,
+    default_type: str,
+) -> None:
+    data = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"type", "message", "level"}
+    }
+    send(
+        str(payload.get("type", default_type)),
+        str(payload.get("message", "")),
+        level=str(payload.get("level", "info")),
+        **data,
+    )
 
 
 def _validate_options(options: FlashOptions) -> None:

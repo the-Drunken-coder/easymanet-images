@@ -62,6 +62,7 @@ def build_release_manifest(
         "openmanet_version": openmanet_version,
         "easymanet_version": EASYMANET_VERSION,
         "artifact": {
+            "target": target,
             "filename": artifact.name,
             "size_bytes": artifact.stat().st_size,
             "sha256": digest,

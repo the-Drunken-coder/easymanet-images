@@ -2,6 +2,7 @@
 
 import json
 import plistlib
+import stat
 
 from easymanet.inject import (
     _cleanup_mount,
@@ -114,6 +115,7 @@ def test_inject_writes_provision_json_to_boot_partition(monkeypatch, tmp_path):
 
     written = boot_mount / "easymanet" / "provision.json"
     assert written.exists()
+    assert stat.S_IMODE(written.stat().st_mode) == 0o600
     data = json.loads(written.read_text())
     assert data["node"]["name"] == "node01"
     assert results[0] == ("/boot/easymanet/provision.json", True)

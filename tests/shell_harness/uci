@@ -97,6 +97,8 @@ case "$1" in
                     val="${val#\'}"
                     val="${val%\'}"
                     printf '%s\n' "$val"
+                else
+                    exit 1
                 fi
                 ;;
             delete)
